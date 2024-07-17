@@ -1,0 +1,29 @@
+---
+- name: Check Service Status by Prompt
+  hosts: all
+  become: yes
+  become_user: root
+  become_method: sudo
+  gather_facts: true
+
+  vars_prompt:
+    - name: service_name
+      prompt: "Enter the service name"
+      private: false
+
+  tasks:
+          - name: Check status of entered service
+            shell: "systemctl is-active {{ service_name }}"
+            register: service_status
+            ignore_errors: true
+
+          - name: Display status of entered service
+            debug:
+                    msg: "{{ service_name }} service is {{ 'running' if service_status.rc == 0 else 'not running or does not exist' }}"
+
+          - name: restarting "{{ service_name }}" service
+            service:
+                    name: "{{ service_name }}"
+                    state: restarted
+
+

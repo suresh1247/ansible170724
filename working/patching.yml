@@ -1,0 +1,69 @@
+---
+ - name: Playbook to Patch Linux Server
+   hosts: all
+   become_user: root
+   become_method: sudo
+   become: yes
+   gather_facts: yes
+   tasks:
+    - name: Removing the existing patch difference text file
+      shell: 'rm -rf difference.txt Beforeartifacts.txt Afterartifacts.txt'
+      run_once: true
+      delegate_to: localhost
+
+    - name: Fetch all the Artificats on the Servers Before Patching:!
+      shell: "(echo -e '\nCMD: cat /etc/redhat-release (Display Distribution information)\n'; cat /etc/redhat-release; echo -e '\nCMD: lsb_release -a (Display Distribution information)\n'; lsb_release -a; echo -e '\nCMD: date (Display Date of system)\n'; date; echo -e '\nCMD: ifconfig -a (Nic Card Details with Ips assigned)\n'; ifconfig -a; echo -e '\nCMD: df -Th (Filesystem with sizes and Type)\n'; df -h; echo -e '\nCMD: netstat -planetu (List of Services Running with their Ports)\n'; netstat -planetu; echo -e '\nCMD: uptime (Server Uptime Details)\n'; uptime; echo -e '\nCMD: route -n (Routing Details)\n'; route -n; echo -e '\nCMD: chronyc sources (Chrony Sources)\n'; chronyc sources; echo -e '\nCMD: chronyd status (Chrony Status)\n'; systemctl status chronyd; echo -e '\nCMD: uname -a (Print all information)\n'; uname -a; echo -e '\nCMD: free -h (Memory Details)\n'; free -h; echo -e '\nCMD: cat /etc/fstab (List of Mount Points in the directory)\n'; cat /etc/fstab; echo -e '\nCMD: cat /proc/mounts (List of Mount Points)\n'; cat /proc/mounts; echo -e '\nCMD: cat /etc/exports (List of file systems Exported)\n'; cat /etc/exports; echo -e '\nCMD: (uname -r) Kernel Version\n'; uname -r; echo -e '\nCMD: ip addr list (List of IP Address)\n'; ip addr list; echo -e '\nCMD: lsblk (Disk Allocated)\n'; lsblk; echo -e '\nCMD: cat /proc/cpuinfo | grep -i processor | wc -l (Total Cpus)\n'; cat /proc/cpuinfo | grep -i processor | wc -l; echo -e '\nCMD: dmidecode (Display Product details of Server)\n'; dmidecode | grep -i Product; echo -e '\nCMD: sestatus (Display SELinux status)\n'; sestatus | grep -i SELinux; echo -e '\nCMD: cat /etc/sysconfig/network-scripts/ifcfg* (Display Nic Details) \n'; cat /etc/sysconfig/network-scripts/ifcfg*; echo -e '\nCMD: ps -ef (Display Process running) \n'; ps -ef;) > Beforeartifacts.txt"
+    - fetch:
+       src: Beforeartifacts.txt
+       dest: "Patch_mgmt/" 
+       flat: yes
+
+    - name: Update all Packages to Centos/Redhat Server
+      yum: name=* state=latest update_cache=yes
+      when: ansible_distribution == "CentOS" or ansible_distribution == "RedHat"
+
+    - name: Check if a reboot is required for Centos/Redhat Server
+      shell: LAST_KERNEL=$(rpm -q --last kernel | awk 'NR==1{sub(/kernel-/,""); print $1}'); CURRENT_KERNEL=$(uname -r); if [ $LAST_KERNEL != $CURRENT_KERNEL ]; then echo 'reboot'; else echo 'no'; fi
+      ignore_errors: true
+      when: ansible_distribution in ['"CentOS"', 'RedHat']
+      register: reboot_hint
+
+#    - name: Restarting the Centos/Redhat Server
+#      shell: sleep 10 && /sbin/shutdown -r now
+#      async: 30
+#      poll: 0
+#      sudo: true
+#      ignore_errors: true
+#      when: ansible_distribution == "CentOS" or ansible_distribution == "RedHat" and reboot_hint.stdout.find("reboot") != -1
+#      register: rebooting
+
+    - name: Reboot the Server
+      command: shutdown -r now
+      async: 1
+      poll: 0
+      ignore_errors: true
+      when: ansible_distribution == "CentOS" or ansible_distribution == "RedHat" and reboot_hint.stdout.find("reboot") != -1
+      register: rebooting
+
+    - name: Pause for 240 seconds Centos/Redhat
+      pause: minutes=4
+      when: rebooting
+
+    - name: Wait for the Centos/Redhat System to Reboot
+      wait_for_connection:
+       connect_timeout: 20
+       sleep: 5
+       delay: 20
+       timeout: 120
+
+    - name: Fetch all the Artificats on the servers After Patching:!
+      shell: "(echo -e '\nCMD: cat /etc/redhat-release (Display Distribution information)\n'; cat /etc/redhat-release; echo -e '\nCMD: lsb_release -a (Display Distribution information)\n'; lsb_release -a; echo -e '\nCMD: date (Display Date of system)\n'; date; echo -e '\nCMD: ifconfig -a (Nic Card Details with Ips assigned)\n'; ifconfig -a; echo -e '\nCMD: df -Th (Filesystem with sizes and Type)\n'; df -h; echo -e '\nCMD: netstat -planetu (List of Services Running with their Ports)\n'; netstat -planetu; echo -e '\nCMD: uptime (Server Uptime Details)\n'; uptime; echo -e '\nCMD: route -n (Routing Details)\n'; route -n; echo -e '\nCMD: chronyc sources (Chrony Sources)\n'; chronyc sources; echo -e '\nCMD: chronyd status (Chrony Status)\n'; systemctl status chronyd; echo -e '\nCMD: uname -a (Print all information)\n'; uname -a; echo -e '\nCMD: free -h (Memory Details)\n'; free -h; echo -e '\nCMD: cat /etc/fstab (List of Mount Points in the directory)\n'; cat /etc/fstab; echo -e '\nCMD: cat /proc/mounts (List of Mount Points)\n'; cat /proc/mounts; echo -e '\nCMD: cat /etc/exports (List of file systems Exported)\n'; cat /etc/exports; echo -e '\nCMD: (uname -r) Kernel Version\n'; uname -r; echo -e '\nCMD: ip addr list (List of IP Address)\n'; ip addr list; echo -e '\nCMD: lsblk (Disk Allocated)\n'; lsblk; echo -e '\nCMD: cat /proc/cpuinfo | grep -i processor | wc -l (Total Cpus)\n'; cat /proc/cpuinfo | grep -i processor | wc -l; echo -e '\nCMD: dmidecode (Display Product details of Server)\n'; dmidecode | grep -i Product; echo -e '\nCMD: sestatus (Display SELinux status)\n'; sestatus | grep -i SELinux; echo -e '\nCMD: cat /etc/sysconfig/network-scripts/ifcfg* (Display Nic Details) \n'; cat /etc/sysconfig/network-scripts/ifcfg*; echo -e '\nCMD: ps -ef (Display Process running) \n'; ps -ef;) > Afterartifacts.txt"
+    - fetch:
+       src: Afterartifacts.txt
+       dest: "Patch_mgmt/"
+       flat: yes
+
+       #    - local_action: shell diff /opt/Before_patch_evidences-{{ inventory_hostname }}.txt /opt/After_patch_evidences-{{ inventory_hostname }}.txt
+       #      register: difference
+       #      failed_when: "difference.rc > 1"
+       #      changed_when: "difference.rc == 1"

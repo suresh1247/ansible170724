@@ -1,0 +1,35 @@
+---
+- name: Check Memory Usage and Save to File
+  hosts: all
+  become: yes
+  become_user: root
+  gather_facts: true
+  vars:
+    memory_threshold_mb: 80
+  tasks:
+          - name: Remove memory_usage file from server
+            command: rm -rf memory_usage.txt
+
+          - name: Gather memory usage information
+            shell: "(echo -e '\nCMD: top \n'; top -o %MEM -b -n 1 | head -n 30; echo -e '\n \n \n CMD: free -m\n'; free -m; echo -e '\n \n \n CMD: ps aux --sort=-%mem | head\n'; ps aux --sort=-%mem | head; echo -e '\n \n \n CMD: vmstat -s\n'; vmstat -s; echo -e '\n \n \n CMD: sar -r\n'; sar -r;) >> memory_usage.txt"
+            become: true
+
+          - name: Check memory usage
+            shell: free -m
+            register: memory_usage
+
+          - name: Check if memory usage exceeds threshold
+            set_fact:
+                  is_memory_breached: "{{ memory_usage.stdout_lines[1].split()[1] | int > memory_threshold_mb }}"
+
+          - name: Clear cache if memory breaches threshold
+            when: is_memory_breached
+            shell: echo 3 > /proc/sys/vm/drop_caches
+
+          - name: Memory usage after clearing cache
+            shell: "(echo -e '\n\n\n\nMemory usage after clearing cache\n'; free -m;) >> memory_usage.txt"
+
+          - name: Fetch memory usage files to Ansible server
+            fetch:
+                    src: "memory_usage.txt"
+                    dest: "memory_usage/"

@@ -1,0 +1,28 @@
+---
+- name: playbook for installation of package
+  hosts: all
+  become_user: root
+  become_method: sudo
+  become: yes 
+  gather_facts: yes
+  tasks:
+          - name: installation of httpd
+            yum:
+                    name: httpd
+                    state: present
+
+          - name: starting httpd
+            service:
+                    name: httpd
+                    state: started
+                    enabled: true
+
+          - name: version checking 
+            shell: httpd -version
+            register: version
+
+          - name: version of httpd
+            debug:
+                    var: version.stdout
+
+         

@@ -1,0 +1,14 @@
+---
+- name: Check Chrony or NTPd Service Status
+  hosts: all
+  gather_facts: yes
+
+  tasks:
+    - name: Display Chrony service status if present
+      ansible.builtin.debug:
+        msg: "Chrony service is {{ 'running' if ansible_facts.services['chronyd'].state == 'running' else 'stopped' }}"
+
+    - name: Display NTPd service status if present
+      ansible.builtin.debug:
+        msg: "NTPd service is {{ 'running' if ansible_facts.services['ntpd'].state == 'running' else 'stopped' }}"
+

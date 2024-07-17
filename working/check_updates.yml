@@ -1,0 +1,19 @@
+---
+- name: Check Memory Usage and Save to File
+  hosts: all
+  become: yes
+  become_user: root
+  become_method: sudo
+  gather_facts: true
+  tasks:
+          - name: Remove patches-list.csv file from server
+            command: rm -rf patches-list.csv
+
+          - name: Gather  list of patches available information
+            shell: "(echo -e '\nCMD: yum check-update \n'; yum check-update  || test $? -eq 100;) >> patches-list.csv"
+            become: true
+
+          - name: Fetch patches-list to Ansible server
+            fetch:
+                    src: "patches-list.csv"
+                    dest: "Patch_mgmt/"

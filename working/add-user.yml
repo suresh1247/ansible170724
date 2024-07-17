@@ -1,0 +1,33 @@
+---
+- name: Set Cron Job
+  hosts: all
+  become_user: root
+  become_method: sudo
+  gather_facts: false
+  become: true
+  vars_prompt:
+          - name: username
+            prompt: "Enter username"
+            private: false
+
+          - name: password
+            prompt: "Enter password"
+            private: true
+  tasks:
+           - name: Check if user exists
+             command: "getent passwd {{ username }}"
+             register: user_exists
+             ignore_errors: yes
+
+           - name: Add user if not already present
+             user:
+                     name: "{{ username }}"
+                     password: "{{ password | password_hash('sha512') }}"
+                     shell: /bin/bash  # Specify the user's shell
+             when: user_exists.rc != 0
+
+           - name: Display message if user already exists
+             debug:
+                     msg: "User '{{ username }}' already exists"
+             when: user_exists.rc == 0
+

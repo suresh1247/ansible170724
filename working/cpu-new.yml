@@ -1,0 +1,18 @@
+---
+- name: Check CPU Usage and Save to File
+  hosts: all
+  gather_facts: true
+
+  tasks:
+          - name: Remove CPU_usage file from server
+            command: rm -rf CPU_usage.txt
+
+          - name: Gather CPU usage information
+            shell: "(echo -e '\nCMD: CPU usage core wise \n'; top -b -n 1 -H | head -n 30; echo -e '\n \n CMD: lscpu | grep -i Core \n'; lscpu | grep -e Core -e CPU -e Thread -e Socket; echo -e '\n \n \n CMD: ps -eo pid,ppid,cmd,%mem,%cpu --sort=-%cpu | head\n'; ps -eo pid,ppid,cmd,%mem,%cpu --sort=-%cpu | head; echo -e '\n \n \n CMD: sar\n'; sar; echo -e '\n \n \n Load on server: \n \n '; sar -q;) >> CPU_usage.txt"
+            become: true
+
+          - name: Fetch CPU usage files to Ansible server
+            fetch:
+
+                    src: "CPU_usage.txt"
+                    dest: "CPU_usage/"

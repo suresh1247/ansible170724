@@ -1,0 +1,26 @@
+---
+- name: Delete User if Exists or Display Message
+  hosts: all
+  become: true
+  vars_prompt:
+          - name: username
+            prompt: "Enter Username to be deleted"
+            private: false
+
+
+  tasks:
+
+          - name: Check if user exists
+            command: "id {{ username }}"
+            register: user_exists
+            ignore_errors: yes
+
+          - name: Delete user if exists
+            user:
+                    name: "{{ username }}"
+                    state: absent
+            when: user_exists.rc == 0
+          - debug:
+                  msg: "User '{{ username }}' not present"
+            when: user_exists.rc != 0
+

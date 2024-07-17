@@ -1,0 +1,155 @@
+    - name: Gather server facts
+      setup:
+
+    - name: Ping the DNS server
+      ping:
+      register: ping_result
+
+    - name: Check CPU Usage
+      shell: top -bn1 | grep 'Cpu(s)' | awk '{usage=100-$8} END {if (usage > 70) print "NOT OK (>80%)"; else print "OK (<80%)"}'
+      register: cpu_usage
+      changed_when: false
+      ignore_errors: true
+
+    - name: Check Memory Usage
+      shell: "free | grep Mem | awk '{print $3/$2 * 100.0}'"
+      register: memory_usage
+      changed_when: false
+      ignore_errors: true
+
+    - name: Execute shell script
+      script: disk_usage.sh
+
+    - name: display df_output
+      shell: "cat df_usage.txt"
+      register: disk_output
+      changed_when: false
+
+    - name: Execute shell script for inodes
+      script: disk_inode.sh
+
+    - name: display inode_output
+      shell: "cat inode_usage.txt"
+      register: inode_output
+      changed_when: false
+
+    - name: Check SSH Port
+      shell: "ss -tnl | grep ':22 '"
+      register: ssh_port
+      changed_when: false
+      ignore_errors: true
+
+    - name: Check PermitRootLogin Setting
+      shell: "sshd -t"
+      register: sshd_config
+      changed_when: false
+      ignore_errors: true
+
+    - name: Check firewall rules
+      shell: "iptables -L | grep -q 'DROP'"
+      register: firewall_check
+      changed_when: false
+      ignore_errors: true
+
+    - name: Check for updates
+      command: "yum check-update"
+      register: update_check
+      ignore_errors: true
+      when: ansible_pkg_mgr == 'yum'
+
+    - name: check for updates in ubuntu
+      command: "apt list --upgradable"
+      register: update_check
+      ignore_errors: true
+      when: ansible_pkg_mgr == 'apt'
+
+
+    - name: Count up-to-date servers
+      set_fact:
+        up_to_date_servers: "{{ ansible_play_hosts | length }}"
+      when: update_check.rc == 0
+      ignore_errors: true
+
+    - name: Count servers with failed patches
+      set_fact:
+        failed_patches_servers: "{{ ansible_play_hosts | length }}"
+      when: update_check.rc != 0
+      ignore_errors: true
+
+    - name: check compliance in the server
+      script: compliance-check.sh
+      register: compliance_check
+      changed_when: false
+      ignore_errors: true
+    - name: reboot check
+      script: reboot_required.sh
+
+    - name: content reboot_required.txt file
+      shell: cat reboot_required.txt
+      register: reboot_required
+
+    - name: Calculate uptime threshold 
+      set_fact:
+        uptime_threshold: 2592000  # 30 days in seconds
+
+    - name: Gather kernel version
+      shell: uname -r
+      register: kernel_version
+      changed_when: false
+
+    - name: Get fstab entries
+      shell: "awk '$1 !~ /^#/ && NF > 0 {print $2}' /etc/fstab"
+      register: fstab_content
+      changed_when: false
+
+    - name: Get df -h output excluding tmpfs mounts
+      shell: "df -h --exclude-type=tmpfs --exclude-type=devtmpfs | awk 'NR > 1 {print $6}'"
+      register: df_output
+      changed_when: false
+
+    - name: Execute systemctl status kdump
+      shell: systemctl status kdump.service | grep Active | awk '{ print $2}'
+      register: kdump_status_result
+      changed_when: false
+
+    - name: Execute systemctl status kdump
+      shell: systemctl status chronyd.service | grep Active | awk '{ print $2}'
+      register: chrony_status_result
+      changed_when: false
+
+    - name: check uptime in server
+      shell: uptime
+      register: uptime_output
+    - name: Extract load averages
+      set_fact:
+        load_averages: "{{ uptime_output.stdout.split(': ')[-1].split(', ') }}"
+
+    - name: Check if fstab entries and df -h mounts are same
+      set_fact:
+        df_fstab_match: "{{ fstab_content.stdout == df_output.stdout }}"
+
+    - name: Display Results
+      debug:
+        msg:
+              - "ping status : {{ 'OK' if ping_result.ping else 'NOT OK' }} "
+                #  - 'CPU Usage : {% if cpu_usage.stdout | float > 50 %} NOT OK (>80%) {% else %} OK ( <80% ) {% endif %}'
+              - 'CPU Usage : {{ cpu_usage.stdout }} '
+              - 'Memory Usage: {% if memory_usage.stdout | float > 80 %} NOT OK ( >80% ){% else %} OK ( <80% ) {% endif %}'
+              - 'Disk Space: {{ disk_output.stdout }} '
+              - 'inodes usage in server: {{ inode_output.stdout }} '
+              - "Load average on server : {{ 'OK (less than 0.7)' if (load_averages[0] | float < 0.7) and (load_averages[1] | float < 0.7) and (load_averages[2] | float < 0.7) else 'NOT OK (more than 0.7)' }}"
+              - 'SSH PORT: {% if ssh_port.stdout %} OK {% else %} Issue Detected {% endif %}'
+              - 'SSH Configuration: {% if sshd_config.rc == 0 %} OK {% else %} NOT OK {% endif %}'
+              - 'Firewall Rules: {% if firewall_check.rc == 0 %} OK {% else %} Not OK {% endif %}'
+                #              - 'Up-to-date servers: {{ up_to_date_servers | default(0) }}'
+                #              - 'Servers with failed patches: {{ failed_patches_servers | default(0) }}'
+              - '{{ compliance_check.stdout }} '
+              - 'Reboot Required: {{ reboot_required.stdout }} '
+              - 'Server uptime as per compliance threshold : {{ "NOT OK (uptime is more than 30days)" if ansible_uptime_seconds | int >= uptime_threshold else "OK (uptime is less than 30days)" }}'
+              - 'Uptime : {{ ansible_uptime_seconds | int / 3600 | float | round(3)}} hours'
+              - "Kernel version : {{ ansible_kernel }}" 
+              - "fstab & df -h matches : {{ 'OK' if df_fstab_match else 'NOT OK' }}"
+              - "kdump status : {{ kdump_status_result.stdout }}"
+              - "chronyd service status : {{ chrony_status_result.stdout }}"
+              - "SELinux status is {{ ansible_distribution }} : {{ ansible_facts.selinux.status }}"
+

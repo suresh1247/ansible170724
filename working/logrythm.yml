@@ -1,0 +1,16 @@
+---
+- name: Check and Restart LogRhythm Service if Required
+  hosts: all
+  become_user: root
+  become_method: sudo
+  gather_facts: false
+  become: true 
+
+  tasks:
+    - name: Check status of LogRhythm service
+      shell: "systemctl is-active logrhythm"
+      register: service_status
+      ignore_errors: true
+
+    - name: Restart LogRhythm service if it is not active
+      shell: "systemctl restart logrhythm"

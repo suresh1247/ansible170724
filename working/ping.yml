@@ -1,0 +1,8 @@
+---
+- name: Checking ping of server
+  hosts: all
+  gather_facts: yes
+  become_user: yes
+  tasks:
+          - name: checking ping
+            ping:

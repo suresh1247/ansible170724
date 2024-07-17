@@ -1,0 +1,25 @@
+---
+- name: Select and run playbook
+  hosts: all
+  gather_facts: true
+  become: yes
+  become_user: root
+  become_method: sudo
+  vars_prompt:
+           - name: playbook_choice
+             prompt: "Choose playbook to run [1: reboot, 2: shutdown (if shutdown type 'shutdown']"
+             private: no
+  tasks:
+
+          - include: reboot.yml
+            when: playbook_choice == "1"
+          - fetch:
+                    src: "{{ item }}"
+                    dest: "RS_mgmt/"
+            loop:
+                    - 'artifacts_before_reboot.txt'
+                    - 'artifacts_after_reboot.txt'
+            when: playbook_choice == "1"
+
+          - include: shutdown.yml
+            when:  playbook_choice == "shutdown"            

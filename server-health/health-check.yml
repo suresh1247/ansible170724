@@ -1,0 +1,121 @@
+          - name: checking CPU usage
+            shell: top -bn1 | grep 'Cpu(s)' | awk '{print $2+$4+$6}'
+            register: cpu_usage
+
+          - name: checking Ping status
+            ping:
+            register: ping_result
+
+          - name: removing if any files exists from privious outputs
+            shell: "rm -rf cpu_usage.txt memory_usage.txt load_usage.txt inode_detailed_usage.txt detailed_disk_usage.txt"
+
+          - name: collecting CPU usage information as CPU usage is high
+            script: cpu-detailed-usage.sh
+            when: cpu_usage.stdout | int < 80
+          - name: Check Memory Usage
+            shell: "free | grep Mem | awk '{print $3/$2 * 100.0}'"
+            register: memory_usage
+            changed_when: false
+            ignore_errors: true
+
+          - name: collecting Memory usage information as Memory usage is high
+            script: memory-detailed-usage.sh
+            when: memory_usage.stdout | int < 80
+
+          - name: checking disk usage in the server
+            script: disk_usage.sh
+
+          - name: fetching the disk usage information
+            shell: "cat df_usage.txt"
+            register: disk_output
+            changed_when: false
+
+          - name: checking inodes in the server
+            script: disk_inode.sh
+
+          - name: fetching inodes information from server
+            shell: "cat inode_usage.txt"
+            register: inode_output
+
+          - name: checking uptime in server
+            shell: uptime
+            register: uptime_output
+
+          - name: Extracting load averages
+            set_fact:
+                    load_averages: "{{ uptime_output.stdout.split(': ')[-1].split(', ') }}"
+
+          - name: running script for detailed load on the server
+            script: load_detailed_usage.sh
+            when: (load_averages[0] | float > 3.0) and (load_averages[1] | float > 3.0) and (load_averages[2] | float > 3.0)
+
+          - name: checking uptime in server
+            shell: "sshd -t"
+            register: sshd_config
+
+          - name: Checking if any firewall rules in the serer
+            shell: "iptables -L | grep -q 'DROP'"
+            register: firewall_check
+            ignore_errors: true
+
+          - name: checking compliance in the server
+            script: compliance-check.sh
+
+          - name: fetching content compliance-check.txt file
+            shell: cat compliance-check.txt
+            register: compliance_check
+            ignore_errors: true
+
+          - name: checking if reboot required to the server
+            script: reboot_required.sh         
+          - name: fetching content reboot_required.txt file
+            shell: cat reboot_required.txt
+            register: reboot_required
+            ignore_errors: true
+
+          - name: fetching fstab entries
+            shell: "cat /etc/fstab | awk '$1 !~ /^#/ && NF > 0 {print $2}'"
+            register: fstab_content
+            changed_when: false
+
+          - name: fetching df -h output excluding tmpfs mounts
+            shell: "df -h --exclude-type=tmpfs --exclude-type=devtmpfs --exclude-type=squashfs | awk 'NR > 1 {print $6}'"
+            register: df_output
+            changed_when: false
+           
+          - name: Checking NTP synchronization status
+            shell: timedatectl | grep -i synchronized | sed 's/[[:space:]]*$//'
+            register: ntp_status 
+          - debug:
+                  msg:
+                          - "ping status : {{ 'OK' if ping_result.ping else 'NOT OK' }} "
+                          - 'CPU Usage : {% if cpu_usage.stdout | float > 50 %} NOT OK (>80%) {% else %} OK ( <80% ) {% endif %}'
+                          - 'Memory Usage: {% if memory_usage.stdout | float > 80 %} NOT OK ( >80% ){% else %} OK ( <80% ) {% endif %}'
+                          - 'Disk Usage : {{ disk_output.stdout }} '
+                          - 'Disk inodes : {{ inode_output.stdout }}'
+                          - "Load average on server : {{ 'OK (less than 0.7)' if (load_averages[0] | float < 0.7) and (load_averages[1] | float < 0.7) and (load_averages[2] | float < 0.7) else 'NOT OK (more than 0.7)' }}"
+                          - 'SSH Configuration: {% if sshd_config.rc == 0 %} OK {% else %} NOT OK {% endif %}' 
+                          - 'Firewall Rules: {% if firewall_check.rc == 0 %} OK {% else %} Not OK {% endif %}' 
+                          - '{{ compliance_check.stdout }} '
+                          - 'Reboot required: {{ reboot_required.stdout }}'
+                          - 'Uptime : {{ (ansible_uptime_seconds / 3600) | round(2) }} hours'
+                          - "Server uptime as per compliance threshold : {{ 'OK' if (ansible_uptime_seconds | int <= 2592000 ) else 'NOT OK(uptime is more than 30days)' }}"
+                          - "Kernel version : {{ ansible_kernel }}"
+                          - 'Time: {% if ntp_status.stdout == "System clock synchronized: yes" %} OK {% else %} NOT OK {% endif %}'
+                          - "fstab & df -h matches : {{ 'OK' if fstab_content.stdout == df_output.stdout else 'NOT OK' }}"
+                          - "SELinux status is {{ ansible_distribution }} : {{ ansible_facts.selinux.status }}"
+                          
+
+
+
+          - name: fetching resource usage files to ansible host
+            fetch:
+                    src: "{{ item }}"
+                    dest: "server_usage/"
+            loop:
+                    - "cpu_usage.txt"
+                    - "memory_usage.txt"
+                    - "detailed_disk_usage.txt"
+                    - "inode_detailed_usage.txt"
+                    - "load_usage.txt"
+            ignore_errors: true

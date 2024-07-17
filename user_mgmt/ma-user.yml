@@ -1,0 +1,29 @@
+---
+- name: User management
+  hosts: all
+  gather_facts: false
+  become: true
+  become_user: root
+  become_method: sudo
+  vars_prompt:
+          - name: user_task
+            prompt: " Enter the task to be exicuted [1: add-user,2: sudo, 3: user-del] "
+            private: no
+
+          - name: username
+            prompt: "Enter username "
+            private: false
+
+  tasks:
+          
+          - include: add-user.yml
+            when: user_task == "1"
+
+          - include: sudo.yml
+            when: user_task == "2"
+
+          - include: user-del.yml
+            when: user_task == "3"
+
+          - meta: end_play
+

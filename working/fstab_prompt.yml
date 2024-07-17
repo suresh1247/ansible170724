@@ -1,0 +1,20 @@
+---
+- name: Add fstab Entries
+  hosts: all
+  become_user: root
+  become_method: sudo
+  gather_facts: false
+  become: true
+  vars_prompt:
+          - name: fstab_entry
+            prompt: "Enter new fstab entry details"
+            private: false
+
+  tasks:
+    - name: Add fstab entries
+      lineinfile:
+        path: /etc/fstab
+        line: "{{ item }}"
+        insertafter: EOF
+      with_items:
+        - "{{ fstab_entry }}"

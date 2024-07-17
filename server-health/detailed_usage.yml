@@ -1,0 +1,15 @@
+          - name: Removing server_usage and server-uptime.txt file from server
+            command: rm -rf server_usage.txt service-uptime.txt
+
+          - name: Gathering server usage information
+            script: resource_usage.sh
+            become: true
+
+          - name: Fetching sever usage files to Ansible server
+            fetch:
+
+                    src: "{{ item }}"
+                    dest: "server_usage/"
+            loop:
+                    - server_usage.txt
+

@@ -1,0 +1,32 @@
+---
+- name: Check CPU Usage and Save to File
+  hosts: all
+  gather_facts: true
+
+  tasks:
+          - name: Remove server_usage file from server
+            command: rm -rf server_usage.txt service-uptime.txt
+
+          - name: Gather server usage information
+            script: resource_usage.sh
+            become: true
+
+          - name: Include and execute shell script on client server
+            script: service.sh
+            register: script_output
+            delegate_to: localhost
+
+          - name: copy output to a file
+            copy:
+                    content: "{{ script_output.stdout }}"
+                    dest: service-uptime.txt
+
+          - name: Fetch sever usage files to Ansible server
+            fetch:
+
+                    src: "{{ item }}"
+                    dest: "server_usage/"
+            loop:
+                    - service-uptime.txt
+                    - server_usage.txt
+

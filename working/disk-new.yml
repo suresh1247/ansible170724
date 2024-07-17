@@ -1,0 +1,28 @@
+---
+- name: Check disk usage and clear temporary files if needed
+  hosts: all
+  become: yes
+  vars:
+    threshold_percent: 80 
+  tasks:
+          - name: remove file disk_usage.txt from server
+            shell: "rm -rf disk_usage.txt"
+
+          - name: Check detailed disk usage in server
+            shell: "(echo -e '\n\n CMD: df -hT \n\n'; df -hT; echo -e '\n \n CMD detailed disk usage in server : \n\n'; du -h / | grep ^[0-9.]*G | sort -nr; ) >> disk_usage.txt"
+
+          - name: Check disk usage
+            shell: df -h --output=pcent /
+            register: disk_usage
+
+          - name: Fetch disk usage details to Ansible server
+            fetch:
+                    src: "disk_usage.txt"
+                    dest: "disk_usage/"
+
+          - name: Clear temporary files if disk usage exceeds threshold
+            shell: find /tmp -type f -exec rm {} + 
+            when: disk_usage.stdout.split('\n')[1] | int > threshold_percent
+
+          - name: Compress oldest log files
+            shell: find /var/log -type f -name "*.log" -mtime +10 -exec tar -czvf {}.tar.gz {} \; 

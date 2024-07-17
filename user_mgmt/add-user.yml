@@ -1,0 +1,17 @@
+---
+- name: Check if user exists
+  command: "getent passwd {{ username }}"
+  register: user_exists
+  ignore_errors: yes
+
+- name: Add user if not already present
+  user:
+          name: "{{ username }}"
+          password: "{{ 'ctrls@123' | password_hash('sha512') }}"
+          shell: /bin/bash
+  when: user_exists.rc != 0
+
+- name: Display message if user already exists
+  debug:
+          msg: "User '{{ username }}' already exists"
+  when: user_exists.rc == 0

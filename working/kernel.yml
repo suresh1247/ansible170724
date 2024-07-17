@@ -1,0 +1,23 @@
+---
+- name: Update kernel parameters
+  hosts: all
+  become: yes
+  vars_prompt:
+    - name: kernel_param_name
+      prompt: "Enter the name of the kernel parameter to update"
+      private: no
+    - name: kernel_param_value
+      prompt: "Enter the new value for the kernel parameter"
+      private: no
+  tasks:
+    - name: Update kernel parameter
+      lineinfile:
+        path: /etc/sysctl.conf
+        regexp: "^{{ kernel_param_name }}\\s*=\\s*"
+        line: "{{ kernel_param_name }} = {{ kernel_param_value }}"
+        state: present
+        backup: yes
+
+    - name: Apply kernel parameter changes
+      command: sysctl -p
+

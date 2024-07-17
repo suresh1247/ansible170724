@@ -1,0 +1,5 @@
+---
+- name: Add user to the wheel group
+  user:
+        name: "{{ username }}"
+        groups: wheel

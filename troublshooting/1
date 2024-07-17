@@ -1,0 +1,7 @@
+---
+- name: Check and start services from file
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: save services list to a file
+      shell: "{ systemctl list-units --type=service --state=running --no-pager | awk '{print $1}' > running_services.txt && sed -i '$d' running_services.txt; sed -i '$d' running_services.txt; sed -i '$d' running_services.txt; sed -i '$d' running_services.txt; sed -i '$d' running_services.txt; sed -i '$d' running_services.txt; sed -i '1d;$d' running_services.txt }"

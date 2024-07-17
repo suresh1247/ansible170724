@@ -1,0 +1,42 @@
+---
+- name: log analyzer tool
+  hosts: all
+  become: yes
+  become_user: root
+  become_method: sudo
+  gather_facts: true 
+  tasks:
+          
+          - name: remove already existing log analyzer files from server
+            shell: "rm -rf log_analysis_* count.txt keywords.txt exclude_keywords.txt"
+
+          - name: copy keywords to client 
+            shell: "echo 'error\nwarning\nFailed to mount\nEXT4-fs error\nkernel: Out of memory\nkernel: oom_reaper\nFailed to start due to high CPU load\nFailed to start due to kernel crash\nKernel panic\nxlog_iodone' >> keywords.txt"
+          - shell: "echo 'log_analysis_\ngrep -A 10 -B 10\ngrep -n -A 10 -B 10\nkeywords.txt' >> exclude_keywords.txt"
+          - name: run the script to fetch 
+            script: log_analyzer.sh 
+
+          - name: Count of each keyword
+            shell: "cat count.txt | while read line; do echo $line; done"
+            register: count_file
+          - name: Fetch sever usage files to Ansible server
+            fetch:
+
+                    src: "{{ item }}"
+                    dest: "logs/"
+            loop:
+                    - 'log_analysis_error.txt'
+                    - 'log_analysis_EXT4-fs error.txt'
+                    - 'log_analysis_Failed to mount.txt'         
+                    - 'log_analysis_Failed to start due to high CPU load.txt'
+                    - 'log_analysis_Failed to start due to kernel crash.txt'
+                    - 'log_analysis_kernel: oom_reaper.txt'
+                    - 'log_analysis_kernel: Out of memory.txt'
+                    - 'log_analysis_Kernel panic.txt'
+                    - 'log_analysis_warning.txt'
+                    - 'log_analysis_xlog_iodone.txt' 
+                    - 'count.txt'
+            ignore_errors: yes
+          - debug:
+                    msg: "{{ count_file.stdout_lines }}"
+

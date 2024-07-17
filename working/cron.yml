@@ -1,0 +1,50 @@
+---
+- name: Set Cron Job
+  hosts: all
+  become_user: root
+  become_method: sudo
+  gather_facts: false
+  become: true
+
+  vars_prompt:
+    - name: cron_name
+      prompt: "Enter the name for the cron job"
+      private: false
+    - name: cron_command
+      prompt: "Enter the command for the cron job"
+      private: false
+    - name: cron_minute
+      prompt: "Enter the minute(s) for the cron job (0-59, *, */2, etc.)"
+      private: false
+    - name: cron_hour
+      prompt: "Enter the hour(s) for the cron job (0-23, *, */2, etc.)"
+      private: false
+    - name: cron_day
+      prompt: "Enter the day(s) of the month for the cron job (1-31, *, */2, etc.)"
+      private: false
+    - name: cron_month
+      prompt: "Enter the month(s) for the cron job (1-12, *, */2, etc.)"
+      private: false
+    - name: cron_weekday
+      prompt: "Enter the day(s) of the week for the cron job (0-6, where 0 and 7 represent Sunday, *, */2, etc.)"
+      private: false
+    - name: cron_user
+      prompt: "Enter the user to run the cron job"
+      private: false
+    - name: cron_state
+      prompt: "Enter the state of the cron job (present/absent)"
+      private: false
+
+  tasks:
+    - name: Set cron job
+      cron:
+        name: "{{ cron_name }}"
+        minute: "{{ cron_minute }}"
+        hour: "{{ cron_hour }}"
+        day: "{{ cron_day }}"
+        month: "{{ cron_month }}"
+        weekday: "{{ cron_weekday }}"
+        job: "{{ cron_command }}"
+        user: "{{ cron_user }}"
+        state: "{{ cron_state }}"
+

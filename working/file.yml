@@ -1,0 +1,21 @@
+---
+- name: File permissions
+  hosts: all
+  become: yes
+  become_user: root
+  become_method: sudo
+  gather_facts: yes
+  vars_prompt:
+          - name: file_path
+            prompt: "Enter the file path:"
+            private: false
+
+          - name: new_permissions
+            prompt: " Enter new permissions:"
+            private: false
+
+  tasks:
+          - name: change file permissions
+            file:
+                    path: "{{ file_path }}"
+                    mode: "{{ new_permissions }}"

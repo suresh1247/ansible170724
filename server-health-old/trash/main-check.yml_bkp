@@ -1,0 +1,53 @@
+---
+- name: Server Health Check
+  hosts: all
+  become: yes
+  become_user: root
+  become_method: sudo
+  gather_facts: true
+  vars:
+    inventory_servers: "{{ groups['servers'] }}"
+  tasks:
+    - name: Run Health Check Playbook
+      include: health-check.yml
+
+    - name: Prompt for detailed usage
+      pause:
+        prompt: "Do you want to see detailed usage for specific servers? (yes/no): "
+      run_once: true
+      register: user_decision
+#      delegate_to: localhost
+
+    - name: Ask for server names or IPs
+      pause:
+        prompt: "Enter the server names or IP addresses (comma-separated, e.g., server1,192.168.1.2):"
+      when: user_decision.user_input == "yes"
+      run_once: true
+      register: server_list_input
+      #      delegate_to: localhost
+
+    - name: Set fact for server list
+      set_fact:
+        server_list: "{{ server_list_input.user_input.split(',') }}"
+      when: server_list_input.user_input is defined
+
+    - name: Validate server list against inventory
+      set_fact:
+        valid_servers: "{{ server_list | select('in', inventory_servers) | list }}"
+      when: server_list is defined
+      delegate_to: "{{ item }}"
+      loop: "{{ server_list }}"
+
+    - name: Check if all specified servers are valid
+      fail:
+        msg: "One or more specified servers are not in the inventory."
+      when: server_list | difference(valid_servers) | length > 0
+
+    - name: Run Detailed Usage Playbook for each valid server
+      include: detailed_usage.yml
+      loop: "{{ valid_servers }}"
+      loop_control:
+        loop_var: target_server
+      delegate_to: "{{ target_server }}"
+      when: valid_servers | length > 0
+

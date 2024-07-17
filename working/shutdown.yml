@@ -1,0 +1,21 @@
+---
+ - name: Playbook to Reboot the server
+   hosts: all
+   become_user: root
+   become_method: sudo
+   become: yes
+   gather_facts: yes
+   tasks:
+    - name: Removing the existing patch difference text file
+      shell: 'rm -rf /opt/artifacts_before_shutdown.txt'
+      run_once: true
+      delegate_to: localhost
+
+    - name: Fetch all the Artificats on the Servers Before Shutdown:!
+      shell: "(echo -e '\nCMD: cat /etc/redhat-release (Display Distribution information)\n'; cat /etc/redhat-release; echo -e '\nCMD: lsb_release -a (Display Distribution information)\n'; lsb_release -a; echo -e '\nCMD: date (Display Date of system)\n'; date; echo -e '\nCMD: ifconfig -a (Nic Card Details with Ips assigned)\n'; ifconfig -a; echo -e '\nCMD: df -Th (Filesystem with sizes and Type)\n'; df -h; echo -e '\nCMD: netstat -planetu (List of Services Running with their Ports)\n'; netstat -planetu; echo -e '\nCMD: uptime (Server Uptime Details)\n'; uptime; echo -e '\nCMD: route -n (Routing Details)\n'; route -n; echo -e '\nCMD: chronyc sources (Chrony Sources)\n'; chronyc sources; echo -e '\nCMD: chronyd status (Chrony Status)\n'; systemctl status chronyd; echo -e '\nCMD: uname -a (Print all information)\n'; uname -a; echo -e '\nCMD: free -h (Memory Details)\n'; free -h; echo -e '\nCMD: cat /etc/fstab (List of Mount Points in the directory)\n'; cat /etc/fstab; echo -e '\nCMD: cat /proc/mounts (List of Mount Points)\n'; cat /proc/mounts; echo -e '\nCMD: cat /etc/exports (List of file systems Exported)\n'; cat /etc/exports; echo -e '\nCMD: (uname -r) Kernel Version\n'; uname -r; echo -e '\nCMD: ip addr list (List of IP Address)\n'; ip addr list; echo -e '\nCMD: lsblk (Disk Allocated)\n'; lsblk; echo -e '\nCMD: cat /proc/cpuinfo | grep -i processor | wc -l (Total Cpus)\n'; cat /proc/cpuinfo | grep -i processor | wc -l; echo -e '\nCMD: dmidecode (Display Product details of Server)\n'; dmidecode | grep -i Product; echo -e '\nCMD: sestatus (Display SELinux status)\n'; sestatus | grep -i SELinux; echo -e '\nCMD: cat /etc/sysconfig/network-scripts/ifcfg* (Display Nic Details) \n'; cat /etc/sysconfig/network-scripts/ifcfg*; echo -e '\nCMD: ps -ef (Display Process running) \n'; ps -ef;) > /opt/artifacts_before_shutdown.txt"
+
+    - name: Shutdown the Server
+      command: init 0
+      async: 1
+      poll: 0
+      ignore_errors: true

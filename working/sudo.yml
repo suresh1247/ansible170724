@@ -1,0 +1,15 @@
+---
+- name: Add User to Wheel Group
+  hosts: all 
+  become: true  # To execute tasks with elevated privileges
+
+  vars_prompt:
+          name: username
+          prompt: "Enter username to which to be added to sudo group" 
+          private: false
+ 
+  tasks:
+          - name: Add user to the wheel group
+            user:
+                    name: "{{ username }}"
+                    groups: wheel

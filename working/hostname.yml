@@ -1,0 +1,35 @@
+---
+- name: Change Hostname
+  hosts: all
+  become: yes
+
+  tasks:
+          - name: display old hostname
+            command: hostname
+            register: old_hostname
+
+          - debug:
+                  var: old_hostname.stdout
+
+          - name: Prompt for new hostname
+            pause:
+              prompt: "Enter the new hostname (without domain):"
+            register: new_hostname_input
+
+          - name: Set new hostname
+            hostname:
+              name: "{{ new_hostname_input.user_input }}"
+
+          - name: Update /etc/hosts
+            lineinfile:
+              path: /etc/hosts
+              regexp: '^127.0.1.1'
+              line: "127.0.1.1   {{ new_hostname_input.user_input }}.{{ ansible_domain }} {{ new_hostname_input.user_input }}"
+            become: yes
+
+          - name : hostname After changing 
+            command: hostname
+            register: hostname_new
+
+          - debug:
+                  var: hostname_new.stdout
