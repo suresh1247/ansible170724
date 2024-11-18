@@ -1,0 +1,17 @@
+- name: Select and run playbook
+  hosts: all
+  gather_facts: true
+  become: yes
+  become_user: root
+  become_method: sudo
+  tasks:
+    - name: reboot the server
+	  shell: reboot
+	  
+	- name: display uptime 
+	  command: uptime
+      register: uptime_output
+
+    - name: display uptime
+      debug:
+          msg: "{{ uptime_output.stdout }}"
