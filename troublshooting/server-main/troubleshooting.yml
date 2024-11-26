@@ -25,7 +25,7 @@
             fetch:
 
                     src: "{{ item }}"
-                    dest: "server_usage/"
+                    dest: "/tmp/"
             loop:
                     - service-uptime.txt
                     - server_usage.txt
