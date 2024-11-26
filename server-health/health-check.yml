@@ -1,3 +1,10 @@
+---
+- name: Server Health Check
+  hosts: all
+  become: yes
+  become_user: root
+  become_method: sudo
+  gather_facts: true       
           - name: checking CPU usage
             shell: top -bn1 | grep 'Cpu(s)' | awk '{print $2+$4+$6}'
             register: cpu_usage
