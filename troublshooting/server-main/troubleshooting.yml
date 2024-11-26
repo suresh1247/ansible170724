@@ -25,7 +25,8 @@
             fetch:
 
                     src: "{{ item }}"
-                    dest: "/tmp/"
+                    dest: "/tmp/{{item}}"
+                    mode: 0777
             loop:
                     - service-uptime.txt
                     - server_usage.txt
