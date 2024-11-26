@@ -118,7 +118,7 @@
           - name: fetching resource usage files to ansible host
             fetch:
                     src: "{{ item }}"
-                    dest: "server_usage/"
+                    dest: "/home/suresh/{{ item }}"
             loop:
                     - "cpu_usage.txt"
                     - "memory_usage.txt"
