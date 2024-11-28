@@ -26,9 +26,9 @@
 
                     src: "{{ item }}"
                     dest: "/tmp/test"
-                    flat:yes
-                    owner:awx
-                    group:awx
+                    flat: yes
+                    owner: awx
+                    group: awx
                     mode: 0775
             loop:
                     - service-uptime.txt
