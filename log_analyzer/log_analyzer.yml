@@ -9,6 +9,7 @@
           
           - name: remove already existing log analyzer files from server
             shell: "rm -rf log_analysis_* count.txt keywords.txt exclude_keywords.txt"
+            ignore_errors: true
 
           - name: copy keywords to client 
             shell: "echo 'error\nwarning\nFailed to mount\nEXT4-fs error\nkernel: Out of memory\nkernel: oom_reaper\nFailed to start due to high CPU load\nFailed to start due to kernel crash\nKernel panic\nxlog_iodone' >> keywords.txt"
