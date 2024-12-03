@@ -1,0 +1,51 @@
+---
+- name: Select and run playbook
+  hosts: all
+  gather_facts: true
+  become: yes
+  become_user: root
+  become_method: sudo
+  vars_prompt:
+           - name: playbook_choice
+             prompt: "Choose playbook to run [1: check_updates, 2: patch without reboot, 3: patch with reboot, 4: reboot"
+             private: no
+  tasks:
+          - include: check_updates.yml
+            when: playbook_choice == "1"
+          - fetch:
+                  src: "patches-list.csv"
+                  dest: "Patch_mgmt/"
+            when: playbook_choice == "1"
+
+          - include: patch-without-reboot.yml 
+            when: playbook_choice == "2"
+
+          - fetch:
+                  src: "{{ item }}"
+                  dest: "Patch_mgmt/"
+            loop:
+                    - 'Beforeartifacts.txt'
+            when: playbook_choice == "2"
+
+          - include: patch-with-reboot.yml
+            when: playbook_choice == "3"
+
+          - fetch:
+                  src: "{{ item }}" 
+                  dest: "Patch_mgmt/"
+            loop:
+                    - 'Beforeartifacts.txt'
+                    - 'Afterartifacts.txt'
+                    - 'running_services.txt'
+                    - 'restarted_services.txt'
+            when: playbook_choice == "3"
+
+          - include: reboot.yml
+            when: playbook_choice == "4"
+          - fetch:
+                    src: "{{ item }}"
+                    dest: "Patch_mgmt/"
+            loop:
+                    - 'artifacts_before_reboot.txt'
+                    - 'artifacts_after_reboot.txt'
+            when: playbook_choice == "4"

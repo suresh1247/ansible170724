@@ -1,0 +1,15 @@
+---
+- name: Remove patches-list.csv file from server
+  command: rm -rf patches-list.csv
+
+- name: Gather  list of patches available information
+  shell: "(echo -e '\nCMD: yum check-update \n'; yum check-update  || test $? -eq 100;) >> patches-list.csv"
+  when: ansible_distribution == "CentOS" or ansible_distribution == "RedHat"
+
+- name: Gather  list of patches available information from Ubuntu & Debian
+  shell: "(echo -e '\nCMD: list packages for update \n'; apt update && apt list --upgradable;) >> patches-list.csv"
+  when: ansible_distribution == "Ubuntu" or ansible_distribution == "Debian"
+
+- name: Gather  list of patches available information from SUSE
+  shell: "(echo -e '\nCMD: list packages for update \n'; zypper refresh && zypper list-updates;) >> patches-list.csv"
+  when: ansible_distribution == "SUSE" or ansible_distribution == "SLES"
