@@ -2,7 +2,9 @@
 - name: Check CPU Usage and Save to File
   hosts: all
   gather_facts: true
-
+  become: yes
+  become_user: root
+  become_method: sudo
   tasks:
           - name: Remove server_usage file from server
             command: rm -rf server_usage.txt service-uptime.txt
