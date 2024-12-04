@@ -40,7 +40,8 @@
 #      register: rebooting
 
       - name: Reboot the Server
-        command: shutdown -r now
+        ansible.builtin.reboot:
+                reboot_timeout: 300
         async: 1
         poll: 0
         ignore_errors: true
