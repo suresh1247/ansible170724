@@ -45,14 +45,10 @@
         async: 1
         poll: 0
         ignore_errors: true
-        when: reboot_hint.stdout.find("reboot") != -1
+        when: reboot_hint.stdout = "reboot"
         register: rebooting
 
-      - name: Pause for 180 seconds Centos/Redhat
-        pause: minutes=3
-        when: rebooting
-
-      - name: Wait for the Centos/Redhat System to Reboot
+      - name: Wait for the server to Reboot
         wait_for_connection:
                 connect_timeout: 20
                 sleep: 5
