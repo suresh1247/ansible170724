@@ -16,5 +16,6 @@
      
      - name: Update all Packages on Server's
        package:
+               update_cache: yes
                name: "*"
                state: latest
