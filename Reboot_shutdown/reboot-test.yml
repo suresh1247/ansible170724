@@ -6,8 +6,8 @@
   become_method: sudo
   tasks:
     - name: reboot the server
-      shell: reboot
-	  
+      ansible.builtin.reboot:
+          reboot_timeout: 300
     - name: display uptime 
       command: uptime
       register: uptime_output
