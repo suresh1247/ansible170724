@@ -44,7 +44,7 @@
         async: 1
         poll: 0
         ignore_errors: true
-        when: reboot_hint.stdout = "reboot"
+        when: reboot_hint.stdout == "reboot"
         register: rebooting
 
       - name: Wait for the server to Reboot
