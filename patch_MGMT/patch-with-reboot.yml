@@ -25,7 +25,7 @@
                 state: latest
       
       - name: Check if a reboot is required for Server's
-        shell: '[ -f /etc/os-release ] && . /etc/os-release && case "$ID" in ubuntu) [ -f /var/run/reboot-required ] && echo "reboot" || echo "no";; centos|rhel) [ "$(rpm -q --last kernel | head -1 | awk '{print $1}')" != "$(uname -r)" ] && echo "reboot" || echo "no";; *) echo "Unsupported OS: $ID"; exit 1;; esac || echo "Unknown operating system"'
+        shell: '[ -f /etc/os-release ] && . /etc/os-release && case "$ID" in ubuntu) [ -f /var/run/reboot-required ] && echo "reboot" || echo "no";; centos|rhel) [ "$(rpm -q --last kernel | head -1 | awk "{print $1}")" != "$(uname -r)" ] && echo "reboot" || echo "no";; *) echo "Unsupported OS: $ID"; exit 1;; esac || echo "Unknown operating system"'
         ignore_errors: true
         register: reboot_hint
 
