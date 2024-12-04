@@ -25,9 +25,8 @@
                 state: latest
       
       - name: Check if a reboot is required for Server's
-        shell: LAST_KERNEL=$(rpm -q --last kernel | awk 'NR==1{sub(/kernel-/,""); print $1}'); CURRENT_KERNEL=$(uname -r); if [ $LAST_KERNEL != $CURRENT_KERNEL ]; then echo 'reboot'; else echo 'no'; fi
+        shell: [ -f /etc/os-release ] && . /etc/os-release && case "$ID" in ubuntu) [ -f /var/run/reboot-required ] && echo "reboot" || echo "no";; centos|rhel) [ "$(rpm -q --last kernel | head -1 | awk '{print $1}')" != "$(uname -r)" ] && echo "reboot" || echo "no";; *) echo "Unsupported OS: $ID"; exit 1;; esac || echo "Unknown operating system"
         ignore_errors: true
-        when: ansible_distribution in ['"CentOS"', 'RedHat', 'Ubuntu', 'Debian', 'SUSE', 'SLES']
         register: reboot_hint
 
 #    - name: Restarting the Centos/Redhat Server
