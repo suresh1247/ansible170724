@@ -1,11 +1,11 @@
 ---
-- name: patch the server and reboot the servers
-  hosts: all
-  gather_facts: true
-  become: yes
-  become_user: root
-  become_method: sudo
-  tasks:
+#- name: patch the server and reboot the servers
+#  hosts: all
+#  gather_facts: true
+#  become: yes
+#  become_user: root
+#  become_method: sudo
+#  tasks:
   
       - name: Removing the existing patch difference text file
         shell: 'rm -rf difference.txt Beforeartifacts.txt Afterartifacts.txt running_services.txt '
@@ -25,7 +25,8 @@
                 state: latest
       
       - name: Check if a reboot is required for Server's
-        shell: '[ -f /etc/os-release ] && . /etc/os-release && case "$ID" in ubuntu) [ -f /var/run/reboot-required ] && echo "reboot" || echo "no";; centos|rhel) [ "$(rpm -q --last kernel | head -n 1 | cut -d" " -f1)" != "kernel-$(uname -r)" ] && echo "reboot" || echo "no";; *) echo "Unsupported OS: $ID"; exit 1;; esac || echo "Unknown operating system"'
+        #        shell: '[ -f /etc/os-release ] && . /etc/os-release && case "$ID" in ubuntu|debian) [ -f /var/run/reboot-required ] && echo reboot || echo no;; centos|rhel|rocky|almalinux|sles|suse) latest_kernel=$(rpm -q --last kernel | head -n 1 | awk '{print $1}'); current_kernel="kernel-$(uname -r)"; [ "$latest_kernel" != "$current_kernel" ] && echo reboot || echo no;; *) echo "Unsupported OS: $ID"; exit 1;; esac || echo "Unknown operating system"' 
+        shell: "[ -f /etc/os-release ] && . /etc/os-release && case \"$ID\" in ubuntu|debian) [ -f /var/run/reboot-required ] && echo reboot || echo no;; centos|rhel|rocky|almalinux|sles|suse) latest_kernel=$(rpm -q --last kernel | head -n 1 | cut -d' ' -f1); current_kernel=kernel-$(uname -r); [ \"$latest_kernel\" != \"$current_kernel\" ] && echo reboot || echo no;; *) echo \"Unsupported OS: $ID\"; exit 1;; esac || echo \"Unknown operating system\""
         ignore_errors: true
         register: reboot_hint
 
@@ -39,9 +40,8 @@
 #      register: rebooting
 
       - name: Reboot the Server
-        ansible.builtin.reboot:
-                reboot_timeout: 300
-        async: 1
+        shell: sleep 10 && /sbin/shutdown -r now
+        async: 30
         poll: 0
         ignore_errors: true
         when: reboot_hint.stdout == "reboot"

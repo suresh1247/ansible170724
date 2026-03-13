@@ -10,14 +10,14 @@
              prompt: "Choose playbook to run [1: check_updates, 2: patch without reboot, 3: patch with reboot, 4: reboot"
              private: no
   tasks:
-          - include: check_updates.yml
+          - include_tasks: check_updates.yml
             when: playbook_choice == "1"
           - fetch:
                   src: "patches-list.csv"
                   dest: "Patch_mgmt/"
             when: playbook_choice == "1"
 
-          - include: patch-without-reboot.yml 
+          - include_tasks: patch-without-reboot.yml 
             when: playbook_choice == "2"
 
           - fetch:
@@ -27,7 +27,7 @@
                     - 'Beforeartifacts.txt'
             when: playbook_choice == "2"
 
-          - include: patch-with-reboot.yml
+          - include_tasks: patch-with-reboot.yml
             when: playbook_choice == "3"
 
           - fetch:
@@ -40,7 +40,7 @@
                     - 'restarted_services.txt'
             when: playbook_choice == "3"
 
-          - include: reboot.yml
+          - include_tasks: reboot.yml
             when: playbook_choice == "4"
           - fetch:
                     src: "{{ item }}"

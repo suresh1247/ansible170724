@@ -1,0 +1,29 @@
+-e 
+CMD: list packages for update 
+
+Hit:1 http://azure.archive.ubuntu.com/ubuntu jammy InRelease
+Get:2 http://azure.archive.ubuntu.com/ubuntu jammy-updates InRelease [128 kB]
+Get:3 http://azure.archive.ubuntu.com/ubuntu jammy-backports InRelease [127 kB]
+Get:4 http://azure.archive.ubuntu.com/ubuntu jammy-security InRelease [129 kB]
+Get:5 http://azure.archive.ubuntu.com/ubuntu jammy-updates/main amd64 Packages [3285 kB]
+Get:6 http://azure.archive.ubuntu.com/ubuntu jammy-updates/universe amd64 Packages [1256 kB]
+Fetched 4925 kB in 1s (4336 kB/s)
+Reading package lists...
+Building dependency tree...
+Reading state information...
+14 packages can be upgraded. Run 'apt list --upgradable' to see them.
+Listing...
+cloud-init/jammy-updates 25.3-0ubuntu1~22.04.1 all [upgradable from: 25.2-0ubuntu1~22.04.1]
+curl/jammy-updates,jammy-security 7.81.0-1ubuntu1.22 amd64 [upgradable from: 7.81.0-1ubuntu1.21]
+gcc-12-base/jammy-updates,jammy-security 12.3.0-1ubuntu1~22.04.3 amd64 [upgradable from: 12.3.0-1ubuntu1~22.04.2]
+git-man/jammy-updates,jammy-security 1:2.34.1-1ubuntu1.17 all [upgradable from: 1:2.34.1-1ubuntu1.15]
+git/jammy-updates,jammy-security 1:2.34.1-1ubuntu1.17 amd64 [upgradable from: 1:2.34.1-1ubuntu1.15]
+libcurl3-gnutls/jammy-updates,jammy-security 7.81.0-1ubuntu1.22 amd64 [upgradable from: 7.81.0-1ubuntu1.21]
+libcurl4/jammy-updates,jammy-security 7.81.0-1ubuntu1.22 amd64 [upgradable from: 7.81.0-1ubuntu1.21]
+libgcc-s1/jammy-updates,jammy-security 12.3.0-1ubuntu1~22.04.3 amd64 [upgradable from: 12.3.0-1ubuntu1~22.04.2]
+libnss3/jammy-updates,jammy-security 2:3.98-0ubuntu0.22.04.3 amd64 [upgradable from: 2:3.98-0ubuntu0.22.04.2]
+libssh-4/jammy-updates,jammy-security 0.9.6-2ubuntu0.22.04.6 amd64 [upgradable from: 0.9.6-2ubuntu0.22.04.5]
+libstdc++6/jammy-updates,jammy-security 12.3.0-1ubuntu1~22.04.3 amd64 [upgradable from: 12.3.0-1ubuntu1~22.04.2]
+linux-cloud-tools-common/jammy-updates,jammy-security 5.15.0-171.181 all [upgradable from: 5.15.0-170.180]
+linux-tools-common/jammy-updates,jammy-security 5.15.0-171.181 all [upgradable from: 5.15.0-170.180]
+sosreport/jammy-updates 4.10.2-0ubuntu0~22.04.1 amd64 [upgradable from: 4.9.2-0ubuntu0~22.04.1]

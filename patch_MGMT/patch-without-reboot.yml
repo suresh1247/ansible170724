@@ -1,10 +1,10 @@
 ---
- - hosts: all
-   become_user: root
-   become_method: sudo
-   become: yes
-   gather_facts: yes
-   tasks:
+# - hosts: all
+#   become_user: root
+#   become_method: sudo
+#   become: yes
+#   gather_facts: yes
+#   tasks:
      - name: Removing the existing patch difference text file
        shell: 'rm -rf Beforeartifacts.txt'
        run_once: true

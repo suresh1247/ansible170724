@@ -1,0 +1,47 @@
+
+CMD: list packages for update 
+
+Repository 'SLE-Module-Basesystem15-SP4-Updates' is up to date.
+Repository 'SLE-Module-Containers15-SP4-Updates' is up to date.
+Repository 'SLE-Module-Desktop-Applications15-SP4-Updates' is up to date.
+Repository 'SLE-Module-DevTools15-SP4-Updates' is up to date.
+Retrieving repository 'SLE-Module-Public-Cloud15-SP4-Updates' metadata [............done]
+Building repository 'SLE-Module-Public-Cloud15-SP4-Updates' cache [....done]
+Repository 'SLE-Module-Python3-15-SP4-Updates' is up to date.
+Repository 'SLE-Product-SLES15-SP4-Updates' is up to date.
+Repository 'SLE-Module-Server-Applications15-SP4-Updates' is up to date.
+Repository 'SLE-Module-Web-Scripting15-SP4-Updates' is up to date.
+Repository 'SLE-Module-Basesystem15-SP4-Pool' is up to date.
+Repository 'SLE-Module-Containers15-SP4-Pool' is up to date.
+Repository 'SLE-Module-Desktop-Applications15-SP4-Pool' is up to date.
+Repository 'SLE-Module-DevTools15-SP4-Pool' is up to date.
+Repository 'SLE-Module-Public-Cloud15-SP4-Pool' is up to date.
+Repository 'SLE-Module-Python3-15-SP4-Pool' is up to date.
+Repository 'SLE-Product-SLES15-SP4-Pool' is up to date.
+Repository 'SLE-Module-Server-Applications15-SP4-Pool' is up to date.
+Repository 'SLE-Module-Web-Scripting15-SP4-Pool' is up to date.
+All repositories have been refreshed.
+Refreshing service 'Basesystem_Module_x86_64'.
+Refreshing service 'Containers_Module_x86_64'.
+Refreshing service 'Desktop_Applications_Module_x86_64'.
+Refreshing service 'Development_Tools_Module_x86_64'.
+Refreshing service 'Public_Cloud_Module_x86_64'.
+Refreshing service 'Python_3_Module_x86_64'.
+Refreshing service 'SUSE_Linux_Enterprise_Server_x86_64'.
+Refreshing service 'Server_Applications_Module_x86_64'.
+Refreshing service 'Web_and_Scripting_Module_x86_64'.
+Loading repository data...
+Reading installed packages...
+S  | Repository                            | Name                  | Current Version       | Available Version     | Arch
+---+---------------------------------------+-----------------------+-----------------------+-----------------------+-------
+v  | SLE-Module-Public-Cloud15-SP4-Updates | libpython3_11-1_0     | 3.11.14-150400.9.69.1 | 3.11.14-150400.9.75.1 | x86_64
+v  | SLE-Module-Public-Cloud15-SP4-Updates | python311             | 3.11.14-150400.9.69.1 | 3.11.14-150400.9.75.1 | x86_64
+v  | SLE-Module-Public-Cloud15-SP4-Updates | python311-azure-core  | 1.30.0-150400.11.3.1  | 1.30.0-150400.11.6.1  | noarch
+v  | SLE-Module-Public-Cloud15-SP4-Updates | python311-base        | 3.11.14-150400.9.69.1 | 3.11.14-150400.9.75.1 | x86_64
+v  | SLE-Module-Public-Cloud15-SP4-Updates | python311-marshmallow | 3.20.2-150400.9.7.1   | 3.20.2-150400.9.10.1  | noarch
+v  | SLE-Module-Public-Cloud15-SP4-Updates | python311-pip         | 22.3.1-150400.17.16.4 | 22.3.1-150400.17.19.1 | noarch
+v  | SLE-Module-Public-Cloud15-SP4-Updates | python311-protobuf    | 4.25.1-150400.9.16.1  | 4.25.1-150400.9.19.1  | x86_64
+v  | SLE-Module-Public-Cloud15-SP4-Updates | python311-pyasn1      | 0.5.0-150400.12.7.2   | 0.5.0-150400.12.10.1  | noarch
+v  | SLE-Module-Public-Cloud15-SP4-Updates | python311-setuptools  | 67.7.2-150400.3.19.1  | 67.7.2-150400.3.22.1  | noarch
+v  | SLE-Module-Public-Cloud15-SP4-Updates | python311-urllib3     | 2.0.7-150400.7.21.1   | 2.0.7-150400.7.27.1   | noarch
+v  | SLE-Module-Public-Cloud15-SP4-Updates | python311-wheel       | 0.40.0-150400.13.7.4  | 0.40.0-150400.13.10.1 | noarch
