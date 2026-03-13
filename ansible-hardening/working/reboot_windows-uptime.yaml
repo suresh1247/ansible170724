@@ -1,0 +1,23 @@
+---
+- name: Reboot Windows Servers and display uptime
+  hosts: windows
+  gather_facts: no
+
+  tasks:
+
+  - name: Reboot the Windows server
+    win_reboot:
+      reboot_timeout: 600
+      pre_reboot_delay: 5
+      post_reboot_delay: 30
+      test_command: whoami
+
+  - name: Get server uptime after reboot
+    win_shell: |
+      $uptime = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+      Write-Output "Last Boot Time: $uptime"
+    register: uptime_output
+
+  - name: Display uptime
+    debug:
+      msg: "{{ uptime_output.stdout }}"

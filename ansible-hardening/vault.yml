@@ -1,0 +1,10 @@
+Vault password:
+---
+# Windows Local Administrator Password
+windows_local_admin_password: "ctrls@1234$#$"
+
+# Linux Root Password
+linux_root_password: "AdminP@ssw0rd"
+
+# Domain Admin Password (same for both OS)
+domain_admin_password: "AdminP@ssw0rd"

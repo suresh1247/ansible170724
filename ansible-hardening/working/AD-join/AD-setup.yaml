@@ -1,0 +1,51 @@
+---
+- name: Join Windows Servers to Domain using PowerShell Script
+  hosts: all
+  gather_facts: yes
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: ntlm
+    ansible_winrm_server_cert_validation: ignore
+  vars_files:
+    - vault.yml
+  
+  tasks:
+    - name: Create ADSetup directory
+      win_file:
+        path: C:\ADSetup
+        state: directory
+
+    - name: Copy PowerShell script
+      win_copy:
+        src: files/Setup-AD.ps1
+        dest: C:\ADSetup\Setup-AD.ps1
+        force: yes
+
+    - name: Execute AD setup script
+      win_shell: |
+        & C:\ADSetup\Setup-AD.ps1
+      async: 3600
+      poll: 10
+      register: script_run
+
+    - name: Reboot server if required
+      win_reboot:
+        reboot_timeout: 600
+        pre_reboot_delay: 5
+        post_reboot_delay: 30
+        msg: "Rebooting to continue AD setup"
+        test_command: whoami
+
+    - name: Fetch log file
+      fetch:
+        src: C:\ADSetup\ad_setup.log
+        dest: "logs/{{ inventory_hostname }}/ad_setup.log"
+        flat: yes
+      ignore_errors: yes
+
+    - name: Display completion message
+      debug:
+        msg:
+          - "AD Setup script executed on {{ inventory_hostname }}"
+          - "Check logs/ad_setup.log for details"
+          - "If reboot occurred, run the playbook again to continue"

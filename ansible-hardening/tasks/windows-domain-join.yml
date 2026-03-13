@@ -1,0 +1,220 @@
+---
+    - name: Create ADSetup directory on remote host
+      win_file:
+        path: C:\ADSetup
+        state: directory
+      tags: always
+
+    - name: Copy PowerShell script to remote host
+      win_copy:
+        src: files/Setup-AD.ps1
+        dest: C:\ADSetup\Setup-AD.ps1
+        force: yes
+      tags: always
+
+    - name: Check if server is already domain joined
+      win_shell: |
+        $cs = Get-CimInstance -ClassName Win32_ComputerSystem
+        if ($cs.PartOfDomain -and $cs.Domain -eq "{{ domain_name }}") {
+          Write-Output "joined"
+        } else {
+          Write-Output "not_joined"
+        }
+      register: domain_check
+      changed_when: false
+      tags: always
+
+    - name: Display current domain status
+      debug:
+        msg: "Server {{ inventory_hostname }} is {{ domain_check.stdout.strip() }} to {{ domain_name }}"
+      tags: always
+
+    - name: Test DNS resolution to domain controller
+      win_shell: |
+        Write-Output "=== DNS Resolution Test ==="
+        try {
+          $dnsTest = Resolve-DnsName -Name "{{ domain_name }}" -ErrorAction Stop
+          Write-Output "SUCCESS: {{ domain_name }} resolved to $($dnsTest.IPAddress -join ', ')"
+        } catch {
+          Write-Output "FAILED: Cannot resolve {{ domain_name }}"
+        }
+        
+        Write-Output "`n=== Domain Controller Connectivity Test ==="
+        $dcIP = "10.0.3.6"
+        $test = Test-Connection -ComputerName $dcIP -Count 2 -Quiet
+        if ($test) {
+          Write-Output "SUCCESS: Can ping domain controller $dcIP"
+        } else {
+          Write-Output "FAILED: Cannot ping domain controller $dcIP"
+        }
+        
+        Write-Output "`n=== Required Ports Test ==="
+        $ports = @(389, 445, 88, 464, 636, 3268, 135)
+        foreach ($port in $ports) {
+          $test = Test-NetConnection -ComputerName $dcIP -Port $port -WarningAction SilentlyContinue
+          if ($test.TcpTestSucceeded) {
+            Write-Output "Port $port : OPEN"
+          } else {
+            Write-Output "Port $port : CLOSED"
+          }
+        }
+      register: dns_test
+      when: domain_check.stdout.strip() == "not_joined"
+      tags: always
+
+    - name: Display DNS test results
+      debug:
+        msg: "{{ dns_test.stdout_lines }}"
+      when: dns_test.stdout is defined
+      tags: always
+
+    - name: Execute domain join script (without OU first for testing)
+      win_shell: |
+        & C:\ADSetup\Setup-AD.ps1 `
+          -DomainName "{{ domain_name }}" `
+          -DomainAdminUser "{{ domain_admin_user }}" `
+          -DomainAdminPassword "{{ domain_admin_password }}"
+      register: script_result
+      when: domain_check.stdout.strip() == "not_joined"
+      ignore_errors: yes
+      tags: always
+
+    - name: Display script output
+      debug:
+        var: script_result.stdout_lines
+      when: script_result.stdout is defined
+      tags: always
+
+    - name: Check if domain join was successful
+      set_fact:
+        join_successful: "{{ script_result.rc == 0 and 'Successfully joined' in script_result.stdout }}"
+        join_failed: "{{ script_result.rc == 1 or 'failed' in script_result.stdout | lower }}"
+      when: script_result.rc is defined
+      tags: always
+
+    - name: Display join status
+      debug:
+        msg: 
+          - "Domain Join Status: {{ 'SUCCESSFUL' if join_successful else 'FAILED' }}"
+          - "Exit Code: {{ script_result.rc }}"
+      when: script_result.rc is defined
+      tags: always
+
+    - name: Try join with OU path if previous succeeded
+      win_shell: |
+        & C:\ADSetup\Setup-AD.ps1 `
+          -DomainName "{{ domain_name }}" `
+          -DomainAdminUser "{{ domain_admin_user }}" `
+          -DomainAdminPassword "{{ domain_admin_password }}" `
+          -OUPath "{{ domain_ou_path }}"
+      register: script_result_ou
+      when: 
+        - join_successful is defined
+        - join_successful
+      ignore_errors: yes
+      tags: always
+
+    - name: Reboot server if join was successful
+      win_reboot:
+        reboot_timeout: 600
+        pre_reboot_delay: 15
+        post_reboot_delay: 30
+        msg: "Rebooting to complete domain join process"
+      when: 
+        - join_successful is defined
+        - join_successful
+      tags: always
+
+    - name: Wait for server to come back after reboot
+      wait_for_connection:
+        timeout: 600
+        delay: 30
+      when: 
+        - join_successful is defined
+        - join_successful
+      tags: always
+
+    - name: Verify domain join after reboot
+      win_shell: |
+        $cs = Get-CimInstance -ClassName Win32_ComputerSystem
+        if ($cs.PartOfDomain -and $cs.Domain -eq "{{ domain_name }}") {
+          Write-Output "SUCCESS: Server {{ inventory_hostname }} successfully joined to {{ domain_name }}"
+          exit 0
+        } else {
+          Write-Output "FAILED: Server not joined to domain"
+          Write-Output "Current Domain: $($cs.Domain)"
+          Write-Output "Part of Domain: $($cs.PartOfDomain)"
+          exit 1
+        }
+      register: verify_result
+      changed_when: false
+      when: 
+        - join_successful is defined
+        - join_successful
+      tags: always
+
+    - name: Display verification result
+      debug:
+        msg: "{{ verify_result.stdout_lines }}"
+      when: verify_result.stdout is defined
+      tags: always
+
+    - name: Create logs directory on control node
+      local_action:
+        module: file
+        path: "logs/{{ inventory_hostname }}"
+        state: directory
+      run_once: true
+      delegate_to: localhost
+      connection: local
+      tags: always
+
+    - name: Save log file locally
+      local_action:
+        module: copy
+        content: |
+          ==========================================
+          DOMAIN JOIN LOG FOR {{ inventory_hostname }}
+          Date: {{ ansible_date_time.iso8601 }}
+          ==========================================
+          
+          DOMAIN CHECK:
+          {{ domain_check.stdout }}
+          
+          DNS TEST RESULTS:
+          {{ dns_test.stdout | default('DNS test not performed') }}
+          
+          SCRIPT EXIT CODE: {{ script_result.rc | default('N/A') }}
+          
+          SCRIPT OUTPUT:
+          {{ script_result.stdout | default('No output') }}
+          
+          SCRIPT ERROR:
+          {{ script_result.stderr | default('No errors') }}
+          
+          JOIN SUCCESSFUL: {{ join_successful | default(false) }}
+          
+          VERIFICATION OUTPUT:
+          {{ verify_result.stdout | default('Verification not performed') }}
+          
+          ==========================================
+        dest: "logs/{{ inventory_hostname }}/domain_join_{{ ansible_date_time.date }}.log"
+      delegate_to: localhost
+      connection: local
+      tags: always
+
+    - name: Display final summary
+      debug:
+        msg:
+          - "============================================================"
+          - "DOMAIN JOIN SUMMARY FOR {{ inventory_hostname }}"
+          - "============================================================"
+          - "Target Domain: {{ domain_name }}"
+          - "Initial Status: {{ domain_check.stdout.strip() }}"
+          - "Script Executed: {{ 'Yes' if script_result.rc is defined else 'No' }}"
+          - "Script Exit Code: {{ script_result.rc | default('N/A') }}"
+          - "Join Successful: {{ join_successful | default(false) }}"
+          - "Final Status: {{ 'SUCCESS' if verify_result.rc is defined and verify_result.rc == 0 else 'PENDING/FAILED' }}"
+          - "Log File: logs/{{ inventory_hostname }}/domain_join_{{ ansible_date_time.date }}.log"
+          - "============================================================"
+      tags: always

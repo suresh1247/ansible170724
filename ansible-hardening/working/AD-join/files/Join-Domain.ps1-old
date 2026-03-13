@@ -1,0 +1,257 @@
+<#
+.SYNOPSIS
+    Joins a Windows server to Active Directory domain
+.DESCRIPTION
+    This script handles complete domain joining process including DNS configuration,
+    hostname setting, domain join, and verification
+.PARAMETER DomainName
+    The FQDN of the domain to join (e.g., ansible.vagrant)
+.PARAMETER DomainControllerIP
+    IP address of the domain controller for DNS configuration
+.PARAMETER DomainAdminUser
+    Domain admin username (e.g., admin@domain.com)
+.PARAMETER DomainAdminPassword
+    Domain admin password
+.PARAMETER OUPath
+    Organizational Unit path for the computer object
+.PARAMETER ComputerName
+    Desired computer name (optional, uses current if not specified)
+#>
+
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$DomainName,
+    
+    [Parameter(Mandatory=$true)]
+    [string]$DomainControllerIP,
+    
+    [Parameter(Mandatory=$true)]
+    [string]$DomainAdminUser,
+    
+    [Parameter(Mandatory=$true)]
+    [string]$DomainAdminPassword,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$OUPath,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$ComputerName
+)
+
+# Import required modules
+Import-Module ActiveDirectory -ErrorAction SilentlyContinue
+
+# Create log file
+$logFile = "C:\Windows\Temp\domain-join-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
+$securePassword = ConvertTo-SecureString -String $DomainAdminPassword -AsPlainText -Force
+$credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $DomainAdminUser, $securePassword
+
+function Write-Log {
+    param([string]$Message)
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    "$timestamp - $Message" | Out-File -FilePath $logFile -Append
+    Write-Host "$timestamp - $Message"
+}
+
+function Test-DNSConfiguration {
+    Write-Log "Testing DNS resolution for $DomainName using $DomainControllerIP"
+    
+    try {
+        $dnsTest = Resolve-DnsName -Name $DomainName -Server $DomainControllerIP -ErrorAction Stop
+        Write-Log "DNS resolution successful: $($dnsTest.IPAddress)"
+        return $true
+    }
+    catch {
+        Write-Log "DNS resolution failed: $_"
+        return $false
+    }
+}
+
+function Set-DNSConfiguration {
+    Write-Log "Configuring DNS to use $DomainControllerIP"
+    
+    try {
+        $adapters = Get-NetAdapter | Where-Object {$_.Status -eq "Up"}
+        foreach ($adapter in $adapters) {
+            Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses $DomainControllerIP
+            Write-Log "DNS configured for adapter: $($adapter.Name)"
+        }
+        return $true
+    }
+    catch {
+        Write-Log "DNS configuration failed: $_"
+        return $false
+    }
+}
+
+function Set-HostnameConfiguration {
+    param([string]$NewComputerName)
+    
+    if (-not $NewComputerName) {
+        Write-Log "No computer name specified, keeping current name: $env:COMPUTERNAME"
+        return $false
+    }
+    
+    $currentName = $env:COMPUTERNAME
+    if ($currentName -eq $NewComputerName) {
+        Write-Log "Computer name already set to $NewComputerName"
+        return $false
+    }
+    
+    Write-Log "Changing computer name from $currentName to $NewComputerName"
+    
+    try {
+        Rename-Computer -NewName $NewComputerName -Force
+        Write-Log "Computer name changed successfully. Reboot required."
+        return $true
+    }
+    catch {
+        Write-Log "Computer name change failed: $_"
+        throw
+    }
+}
+
+function Test-DomainMembership {
+    Write-Log "Checking current domain membership"
+    
+    $computerInfo = Get-WmiObject -Class Win32_ComputerSystem
+    
+    if ($computerInfo.PartOfDomain) {
+        Write-Log "Currently joined to domain: $($computerInfo.Domain)"
+        if ($computerInfo.Domain -eq $DomainName) {
+            return "joined_correct"
+        }
+        else {
+            return "joined_wrong"
+        }
+    }
+    else {
+        Write-Log "Not currently joined to any domain"
+        return "not_joined"
+    }
+}
+
+function Join-Domain {
+    Write-Log "Starting domain join process for $DomainName"
+    
+    try {
+        # Add computer to domain with OU path if specified
+        if ($OUPath) {
+            Write-Log "Joining domain with OU path: $OUPath"
+            Add-Computer -DomainName $DomainName -Credential $credential -OUPath $OUPath -Force -ErrorAction Stop
+        }
+        else {
+            Write-Log "Joining domain (default OU)"
+            Add-Computer -DomainName $DomainName -Credential $credential -Force -ErrorAction Stop
+        }
+        
+        Write-Log "Domain join command executed successfully"
+        return $true
+    }
+    catch {
+        Write-Log "Domain join failed: $_"
+        return $false
+    }
+}
+
+function Verify-DomainJoin {
+    Write-Log "Verifying domain join"
+    
+    try {
+        # Wait for domain join to complete
+        Start-Sleep -Seconds 10
+        
+        $computerInfo = Get-WmiObject -Class Win32_ComputerSystem
+        $domainInfo = Get-WmiObject -Class Win32_NTDomain -ErrorAction SilentlyContinue
+        
+        if ($computerInfo.PartOfDomain -and $computerInfo.Domain -eq $DomainName) {
+            Write-Log "SUCCESS: Server is now joined to $DomainName"
+            
+            # Get additional domain information
+            try {
+                $adComputer = Get-ADComputer -Identity $env:COMPUTERNAME -Credential $credential -Server $DomainName -ErrorAction SilentlyContinue
+                Write-Log "AD Object Created: $($adComputer.DistinguishedName)"
+                Write-Log "Last Logon: $($adComputer.LastLogonDate)"
+            }
+            catch {
+                Write-Log "Unable to query AD for computer object (may take time to replicate)"
+            }
+            
+            # Get domain controller info
+            $dcInfo = nltest /dsgetdc:$DomainName 2>$null
+            Write-Log "Domain Controller: $dcInfo"
+            
+            return $true
+        }
+        else {
+            Write-Log "FAILED: Server is not properly joined to domain"
+            Write-Log "Current Domain: $($computerInfo.Domain)"
+            Write-Log "Part of Domain: $($computerInfo.PartOfDomain)"
+            return $false
+        }
+    }
+    catch {
+        Write-Log "Verification failed: $_"
+        return $false
+    }
+}
+
+# Main execution
+Write-Log "========== DOMAIN JOIN SCRIPT STARTED =========="
+Write-Log "Domain: $DomainName"
+Write-Log "DC IP: $DomainControllerIP"
+Write-Log "Admin User: $DomainAdminUser"
+Write-Log "OU Path: $OUPath"
+if ($ComputerName) { Write-Log "Target Computer Name: $ComputerName" }
+
+# Step 1: Check current domain status
+$domainStatus = Test-DomainMembership
+
+if ($domainStatus -eq "joined_correct") {
+    Write-Log "Server is already correctly joined to $DomainName. No action needed."
+    Write-Log "========== DOMAIN JOIN SCRIPT COMPLETED =========="
+    exit 0
+}
+
+# Step 2: Configure DNS
+Write-Log "Step 1: Configuring DNS"
+if (-not (Test-DNSConfiguration)) {
+    if (-not (Set-DNSConfiguration)) {
+        Write-Log "CRITICAL: DNS configuration failed"
+        exit 1
+    }
+    
+    # Wait for DNS to take effect
+    Start-Sleep -Seconds 5
+    
+    if (-not (Test-DNSConfiguration)) {
+        Write-Log "CRITICAL: DNS resolution still failing after configuration"
+        exit 1
+    }
+}
+
+# Step 3: Configure hostname if specified
+Write-Log "Step 2: Configuring hostname"
+$rebootRequired = Set-HostnameConfiguration -NewComputerName $ComputerName
+
+# Step 4: Join domain
+Write-Log "Step 3: Joining domain"
+if (Join-Domain) {
+    Write-Log "Domain join successful. Reboot required."
+    $rebootRequired = $true
+}
+else {
+    Write-Log "CRITICAL: Domain join failed"
+    exit 1
+}
+
+# Step 5: Exit with reboot flag
+Write-Log "========== DOMAIN JOIN SCRIPT COMPLETED =========="
+Write-Log "REBOOT_REQUIRED=$rebootRequired"
+
+if ($rebootRequired) {
+    exit 2  # Exit code 2 indicates reboot required
+}
+else {
+    exit 0
+}

@@ -1,0 +1,77 @@
+---
+- name: Join Servers to Active Directory Domain (Multi-OS Support)
+  hosts: all
+  gather_facts: yes
+  vars_files:
+    - vault.yml
+  vars:
+    # Set OS-specific OU paths
+    windows_ou: "{{ windows_domain_join_ou | default(domain_ou_path) }}"
+    linux_ou: "{{ linux_domain_join_ou | default(domain_ou_path) }}"
+  
+  tasks:
+    - name: Display target server information
+      debug:
+        msg:
+          - "=========================================="
+          - "Server: {{ inventory_hostname }}"
+          - "OS Family: {{ ansible_os_family | default('windows') }}"
+          - "OS Distribution: {{ ansible_distribution | default('unknown') }}"
+          - "Domain: {{ domain_name }}"
+          - "=========================================="
+      tags: always
+
+    # ============================================
+    # WINDOWS SERVER TASKS
+    # ============================================
+    - name: WINDOWS - Include Windows domain join tasks
+      include_tasks: tasks/windows-domain-join.yml
+      when: ansible_os_family == "Windows"
+
+    # ============================================
+    # LINUX SERVER TASKS (RedHat/CentOS)
+    # ============================================
+    - name: LINUX - Include RedHat domain join tasks
+      include_tasks: tasks/linux-rhel-domain-join.yml
+      when: 
+        - ansible_os_family == "RedHat"
+        - ansible_distribution != "Fedora"
+
+    # ============================================
+    # LINUX SERVER TASKS (Debian/Ubuntu)
+    # ============================================
+    - name: LINUX - Include Debian domain join tasks
+      include_tasks: tasks/linux-debian-domain-join.yml
+      when: ansible_os_family == "Debian"
+
+    # ============================================
+    # LINUX SERVER TASKS (SUSE)
+    # ============================================
+    - name: LINUX - Include SUSE domain join tasks
+      include_tasks: tasks/linux-suse-domain-join.yml
+      when: ansible_os_family == "Suse"
+
+    # ============================================
+    # COMMON VERIFICATION TASKS
+    # ============================================
+    - name: COMMON - Verify domain join status
+      include_tasks: tasks/verify-domain-join.yml
+      tags: always
+
+    # ============================================
+    # SUMMARY REPORT
+    # ============================================
+    - name: COMMON - Display final summary
+      debug:
+        msg:
+          - "============================================================"
+          - "DOMAIN JOIN SUMMARY FOR {{ inventory_hostname }}"
+          - "============================================================"
+          - "Server: {{ inventory_hostname }}"
+          - "OS Type: {{ ansible_os_family | default('windows') }}"
+          - "Domain: {{ domain_name }}"
+          - "Status: {{ domain_join_status | default('PENDING') }}"
+          - "Message: {{ domain_join_message | default('No message') }}"
+          - "Log File: logs/{{ inventory_hostname }}/domain_join_{{ ansible_date_time.date }}.log"
+          - "============================================================"
+      tags: always

@@ -1,0 +1,115 @@
+---
+- name: LINUX (Debian) - Check if already domain joined
+  command: realm list
+  register: linux_domain_check
+  changed_when: false
+  failed_when: false
+
+- name: LINUX (Debian) - Display current domain status
+  debug:
+    msg: "Linux Server {{ inventory_hostname }} domain status: {{ 'Joined' if domain_name in linux_domain_check.stdout else 'Not Joined' }}"
+
+- name: LINUX (Debian) - Update apt cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+  become: yes
+  when: domain_name not in linux_domain_check.stdout
+  register: apt_update
+  until: apt_update is success
+  retries: 3
+  delay: 10
+
+- name: LINUX (Debian) - Install required packages
+  apt:
+    name:
+      - realmd
+      - sssd
+      - sssd-tools
+      - krb5-user
+      - adcli
+      - oddjob
+      - oddjob-mkhomedir
+      - libnss-sss
+      - libpam-sss
+      - packagekit
+    state: present
+    update_cache: no
+  become: yes
+  when: domain_name not in linux_domain_check.stdout
+  register: pkg_install
+  until: pkg_install is success
+  retries: 3
+  delay: 10
+
+- name: LINUX (Debian) - Configure DNS
+  lineinfile:
+    path: /etc/resolv.conf
+    line: "nameserver {{ domain_controller_ip }}"
+    regexp: '^nameserver'
+    backup: yes
+  when: domain_name not in linux_domain_check.stdout
+
+- name: LINUX (Debian) - Set hostname with FQDN
+  hostname:
+    name: "{{ inventory_hostname_short }}.{{ domain_name }}"
+  when: domain_name not in linux_domain_check.stdout
+
+- name: LINUX (Debian) - Update /etc/hosts
+  lineinfile:
+    path: /etc/hosts
+    regexp: '^{{ ansible_default_ipv4.address }}.*$'
+    line: "{{ ansible_default_ipv4.address }} {{ inventory_hostname_short }}.{{ domain_name }} {{ inventory_hostname_short }}"
+  when: domain_name not in linux_domain_check.stdout
+
+- name: LINUX (Debian) - Join domain
+  shell: |
+    echo "{{ domain_admin_password }}" | realm join --verbose \
+      --user="{{ domain_admin_user }}" \
+      --computer-ou="{{ linux_ou }}" \
+      "{{ domain_name }}"
+  register: linux_join_result
+  when: domain_name not in linux_domain_check.stdout
+  ignore_errors: yes
+
+- name: LINUX (Debian) - Configure SSSD for home directories
+  lineinfile:
+    path: /etc/sssd/sssd.conf
+    regexp: '^override_homedir'
+    line: 'override_homedir = /home/%d/%u'
+    insertafter: '\[domain/{{ domain_name }}\]'
+  when: linux_join_result is success
+
+- name: LINUX (Debian) - Configure default shell
+  lineinfile:
+    path: /etc/sssd/sssd.conf
+    regexp: '^default_shell'
+    line: 'default_shell = /bin/bash'
+    insertafter: '\[domain/{{ domain_name }}\]'
+  when: linux_join_result is success
+
+- name: LINUX (Debian) - Configure sudoers for domain admins
+  lineinfile:
+    path: /etc/sudoers.d/domain-admins
+    line: "%domain\\ admins ALL=(ALL) ALL"
+    create: yes
+    validate: 'visudo -cf %s'
+  when: linux_join_result is success
+
+- name: LINUX (Debian) - Enable mkhomedir
+  command: pam-auth-update --enable mkhomedir
+  when: linux_join_result is success
+
+- name: LINUX (Debian) - Restart SSSD
+  systemd:
+    name: sssd
+    state: restarted
+    enabled: yes
+    daemon_reload: yes
+  when: linux_join_result is success
+
+- name: LINUX (Debian) - Set domain join status fact
+  set_fact:
+    domain_join_status: "{{ 'SUCCESS' if linux_join_result.rc == 0 else 'FAILED' }}"
+    domain_join_message: "{{ linux_join_result.stdout | default('No output') }}"
+  when: linux_join_result.rc is defined

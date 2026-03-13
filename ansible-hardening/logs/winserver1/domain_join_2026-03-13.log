@@ -1,0 +1,44 @@
+==========================================
+DOMAIN JOIN LOG FOR winserver1
+Date: 2026-03-13T08:07:39Z
+==========================================
+
+DOMAIN CHECK:
+not_joined
+
+
+DNS TEST RESULTS:
+=== DNS Resolution Test ===
+SUCCESS: nat.net resolved to 10.0.3.6
+
+=== Domain Controller Connectivity Test ===
+SUCCESS: Can ping domain controller 10.0.3.6
+
+=== Required Ports Test ===
+Port 389 : OPEN
+Port 445 : OPEN
+Port 88 : OPEN
+Port 464 : OPEN
+Port 636 : OPEN
+Port 3268 : OPEN
+Port 135 : OPEN
+
+
+SCRIPT EXIT CODE: 0
+
+SCRIPT OUTPUT:
+[INFO]  Starting domain join check for target domain 'nat.net'...
+[INFO]  Attempting to join the domain 'nat.net'...
+[OK]    Successfully joined 'nat.net'. A reboot is required to complete the operation.
+
+
+SCRIPT ERROR:
+
+
+JOIN SUCCESSFUL: True
+
+VERIFICATION OUTPUT:
+SUCCESS: Server winserver1 successfully joined to nat.net
+
+
+==========================================

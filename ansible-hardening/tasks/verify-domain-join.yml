@@ -1,0 +1,67 @@
+---
+- name: VERIFY - Check domain join status
+  block:
+    - name: VERIFY - Windows domain verification
+      win_shell: |
+        $cs = Get-CimInstance -ClassName Win32_ComputerSystem
+        if ($cs.PartOfDomain -and $cs.Domain -eq "{{ domain_name }}") {
+          Write-Output "VERIFIED: Successfully joined to {{ domain_name }}"
+          exit 0
+        } else {
+          Write-Output "NOT VERIFIED: Not joined to domain"
+          Write-Output "Current Domain: $($cs.Domain)"
+          Write-Output "Part of Domain: $($cs.PartOfDomain)"
+          exit 1
+        }
+      register: verify_windows
+      when: ansible_os_family == "Windows"
+      ignore_errors: yes
+
+    - name: VERIFY - Linux domain verification (realm)
+      command: realm list
+      register: verify_linux_realm
+      changed_when: false
+      failed_when: false
+      become: yes
+      when: ansible_os_family != "Windows"
+
+    - name: VERIFY - Linux domain verification (adcli)
+      command: adcli testjoin
+      register: verify_linux_adcli
+      changed_when: false
+      failed_when: false
+      become: yes
+      when: 
+        - ansible_os_family != "Windows"
+        - verify_linux_realm.rc != 0
+
+    - name: VERIFY - Set verification facts for Windows
+      set_fact:
+        domain_verified: "{{ verify_windows.rc == 0 }}"
+        verification_output: "{{ verify_windows.stdout }}"
+      when: ansible_os_family == "Windows" and verify_windows.rc is defined
+
+    - name: VERIFY - Set verification facts for Linux
+      set_fact:
+        domain_verified: "{{ domain_name in verify_linux_realm.stdout or verify_linux_adcli.rc == 0 }}"
+        verification_output: "{{ verify_linux_realm.stdout | default(verify_linux_adcli.stdout) }}"
+      when: ansible_os_family != "Windows"
+
+  rescue:
+    - name: VERIFY - Verification failed
+      set_fact:
+        domain_verified: false
+        verification_output: "Verification failed with error"
+
+  always:
+    - name: VERIFY - Display verification result
+      debug:
+        msg: 
+          - "Domain Verification: {{ 'SUCCESS' if domain_verified else 'FAILED' }}"
+          - "Details: {{ verification_output | default('No output') }}"
+
+    - name: VERIFY - Update domain join status if verification passed
+      set_fact:
+        domain_join_status: "SUCCESS"
+        domain_join_message: "{{ domain_join_message | default('') }} - Verified"
+      when: domain_verified

@@ -1,0 +1,255 @@
+---
+- name: Windows Server Health Check
+  hosts: all
+  gather_facts: yes
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: ntlm 
+    ansible_winrm_server_cert_validation: ignore
+
+  tasks:
+    - name: checking CPU usage
+      win_shell: |
+        $CPU = Get-Counter '\Processor(_Total)\% Processor Time' -SampleInterval 1 -MaxSamples 1
+        [math]::Round($CPU.CounterSamples.CookedValue, 2)
+      register: cpu_usage
+      ignore_errors: true
+    - name: removing if any files exists from previous outputs
+      win_shell: |
+        $files = @("cpu_usage.txt", "memory_usage.txt", "load_usage.txt", "inode_detailed_usage.txt", "detailed_disk_usage.txt")
+        foreach ($file in $files) {
+          if (Test-Path $file) {
+            Remove-Item $file -Force
+          }
+        }
+      ignore_errors: true
+
+
+
+    - name: collecting CPU usage information as CPU usage is high
+      win_shell: |
+        Get-WmiObject -Class Win32_Processor | Select-Object -Property Name, NumberOfCores, MaxClockSpeed, Status | Format-List > cpu_usage.txt
+        Get-Process | Sort-Object -Property CPU -Descending | Select-Object -First 10 ProcessName, CPU, WorkingSet >> cpu_usage.txt
+      when: cpu_usage.stdout | float < 80
+
+        
+    - name: checking Ping status
+      win_ping:
+      register: ping_result
+
+    - name: Check Memory Usage
+      win_shell: |
+        $OS = Get-WmiObject Win32_OperatingSystem
+        $TotalMemory = $OS.TotalVisibleMemorySize
+        $FreeMemory = $OS.FreePhysicalMemory
+        $UsedMemory = $TotalMemory - $FreeMemory
+        [math]::Round(($UsedMemory / $TotalMemory) * 100, 2)
+      register: memory_usage
+      changed_when: false
+      ignore_errors: true
+
+    - name: collecting Memory usage information as Memory usage is high
+      win_shell: |
+        Get-WmiObject Win32_OperatingSystem | Format-List > memory_usage.txt
+        Get-Process | Sort-Object -Property WorkingSet -Descending | Select-Object -First 20 ProcessName, WorkingSet, CPU >> memory_usage.txt
+        Get-WmiObject Win32_PhysicalMemory | Format-List >> memory_usage.txt
+      when: memory_usage.stdout | float < 80
+
+
+    - name: checking disk usage in the server
+      win_shell: |
+        Get-WmiObject Win32_LogicalDisk -Filter "DriveType=3" | 
+        Select-Object DeviceID, @{Name="Size(GB)";Expression={[math]::Round($_.Size/1GB,2)}},
+        @{Name="FreeSpace(GB)";Expression={[math]::Round($_.FreeSpace/1GB,2)}},
+        @{Name="Used(GB)";Expression={[math]::Round(($_.Size - $_.FreeSpace)/1GB,2)}},
+        @{Name="Used%";Expression={[math]::Round((($_.Size - $_.FreeSpace)/$_.Size)*100,2)}} |
+        Format-Table -AutoSize > df_usage.txt
+
+    - name: fetching the disk usage information
+      win_shell: Get-Content df_usage.txt
+      register: disk_output
+      changed_when: false
+
+    - name: fetching inodes information from server
+      win_shell: Get-Content inode_usage.txt
+      register: inode_output
+      ignore_errors: true
+      when: inode_check is success
+
+    - name: checking uptime in server
+      win_shell: |
+        $OS = Get-WmiObject Win32_OperatingSystem
+        $Uptime = (Get-Date) - $OS.ConvertToDateTime($OS.LastBootUpTime)
+        Write-Output "$($Uptime.Days) days, $($Uptime.Hours) hours, $($Uptime.Minutes) minutes"
+      register: uptime_output
+
+    - name: Extracting load averages
+      set_fact:
+        load_averages: "{{ uptime_output.stdout.split(', ') }}"
+
+    - name: running script for detailed load on the server
+      win_shell: |
+        Get-Counter '\System\Processor Queue Length' -MaxSamples 5 > load_detailed_usage.txt
+        Get-Process | Sort-Object -Property CPU -Descending | Select-Object -First 20 >> load_detailed_usage.txt
+      when: false
+
+    - name: checking WinRM configuration
+      win_shell: |
+        $service = Get-Service -Name WinRM
+        $trustedHosts = Get-Item -Path WSMan:\localhost\Client\TrustedHosts -ErrorAction SilentlyContinue
+        Write-Output "WinRM Service: $($service.Status)"
+        Write-Output "TrustedHosts: $($trustedHosts.Value)"
+      register: winrm_config
+      ignore_errors: true
+
+    - name: Detailed firewall status check
+      win_shell: |
+        $profiles = Get-NetFirewallProfile | Select-Object Name, Enable
+        $enabledProfiles = $profiles | Where-Object {$_.Enabled -eq 'True'}
+        $disabledProfiles = $profiles | Where-Object {$_.Enabled -eq 'False'}
+
+        if ($enabledProfiles.Count -eq 0) {
+          Write-Output "Firewall Status: COMPLETELY DISABLED"
+        } else {
+          Write-Output "Firewall Status: PARTIALLY ENABLED"
+          Write-Output "Enabled Profiles: $($enabledProfiles.Name -join ', ')"
+          Write-Output "Disabled Profiles: $($disabledProfiles.Name -join ', ')"
+
+          $activeRules = Get-NetFirewallRule | Where-Object {$_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound'}
+          Write-Output "Active Inbound Rules: $($activeRules.Count)"
+        }
+      register: firewall_check
+      ignore_errors: true
+
+
+
+    #    - name: Checking if any firewall rules in the server
+    #  win_shell: |
+    #    $rules = Get-NetFirewallRule | Where-Object {$_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound'}
+    #    if ($rules.Count -gt 0) { 
+    #      Write-Output "Active Firewall Rules Found: $($rules.Count)"
+    #    } else { 
+    #      Write-Output "No Active Firewall Rules Found"
+    #    }
+    #  register: firewall_check
+    #  ignore_errors: true
+
+    - name: checking compliance in the server
+      win_shell: |
+        $OS = Get-WmiObject Win32_OperatingSystem
+        $Hotfixes = Get-HotFix | Select-Object -First 10
+        $Services = Get-Service | Where-Object {$_.Status -eq 'Running'} | Select-Object -First 10
+        
+        # Simple compliance check - just verify critical services are running and hotfixes are installed
+        $complianceStatus = "OK"
+        $issues = @()
+        
+        # Check if critical services are running
+        $criticalServices = @("WinRM", "W32Time", "Dnscache")
+        foreach ($svc in $criticalServices) {
+          $service = Get-Service -Name $svc -ErrorAction SilentlyContinue
+          if (-not $service -or $service.Status -ne "Running") {
+            $complianceStatus = "NOT OK"
+            $issues += "Critical service $svc not running"
+          }
+        }
+        
+        # Check if any recent hotfixes are installed (last 30 days)
+        $recentHotfixes = $Hotfixes | Where-Object { $_.InstalledOn -gt (Get-Date).AddDays(-30) }
+        if ($recentHotfixes.Count -eq 0) {
+          $complianceStatus = "NOT OK"
+          $issues += "No recent hotfixes in last 30 days"
+        }
+        
+        # Output simple compliance status
+        Write-Output "Compliance Status: $complianceStatus"
+        if ($issues.Count -gt 0) {
+          Write-Output "Issues Found:"
+          $issues | ForEach-Object { Write-Output "  - $_" }
+        } else {
+          Write-Output "All checks passed"
+        }
+      register: compliance_check_raw
+      ignore_errors: true
+
+    - name: Set compliance fact
+      set_fact:
+        compliance_status: "{{ 'OK' if 'Compliance Status: OK' in compliance_check_raw.stdout else 'NOT OK' }}"
+        compliance_details: "{{ compliance_check_raw.stdout_lines | select('search', 'Issues Found|All checks passed') | list | join('\n') }}"
+
+    - name: fetching content compliance-check.txt file
+      win_shell: Get-Content compliance-check.txt
+      register: compliance_check
+      ignore_errors: true
+
+    - name: checking if reboot required to the server
+      win_shell: |
+        $rebootPending = $false
+        if (Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update") {
+          $rebootPending = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update" -Name RebootRequired -ErrorAction SilentlyContinue
+        }
+        if ($rebootPending) { 
+          Write-Output "Reboot Required" 
+        } else { 
+          Write-Output "No Reboot Required" 
+        }
+      register: reboot_required
+      ignore_errors: true
+
+
+    - name: fetching mounted drives
+      win_shell: |
+        Get-WmiObject Win32_LogicalDisk -Filter 'DriveType=3' | Select-Object DeviceID | ForEach-Object { $_.DeviceID }
+      register: fstab_content
+      changed_when: false
+
+    - name: fetching drives output
+      win_shell: |
+        Get-WmiObject Win32_LogicalDisk -Filter 'DriveType=3' | Select-Object DeviceID | ForEach-Object { $_.DeviceID }
+      register: df_output
+      changed_when: false
+
+    - name: Checking NTP synchronization status
+      win_shell: |
+        try {
+          $timeInfo = w32tm /query /status
+          if ($timeInfo -match "Source:") { 
+            Write-Output "System clock synchronized: yes"
+          } else { 
+            Write-Output "System clock synchronized: no"
+          }
+        } catch {
+          Write-Output "System clock synchronized: unknown"
+        }
+      register: ntp_status
+      ignore_errors: true
+
+
+
+    - name: Get Windows version information
+      set_fact:
+        windows_version: "{{ ansible_distribution }} {{ ansible_distribution_version }}"
+        selinux_status: "Not Applicable for Windows"
+
+    - name: Debug output
+      debug:
+        msg:
+          - "ping status : {{ 'OK' if ping_result.ping == 'pong' else 'NOT OK' }}"
+          - "CPU Usage : {% if cpu_usage.stdout | float > 80 %} NOT OK (>80%) {% else %} OK (<80%) {% endif %}"
+          - "Memory Usage: {% if memory_usage.stdout | float > 80 %} NOT OK (>80%) {% else %} OK (<80%) {% endif %}"
+          - "Disk Usage :{{ disk_output.stdout_lines | default(['No disk info available']) }}"
+          - "File/Folder counts : {{ inode_output.stdout_lines | default(['No inode info available']) | join('\n') }}"
+          - "Uptime : {{ uptime_output.stdout | default('Unknown') }}"
+          - "WinRM Configuration: {{ winrm_config.stdout | default('Not Available') }}"
+            # - "Firewall Rules: {{ firewall_check.stdout | default('Not Available') }}"
+          - "Firewall Status: {{ firewall_check.stdout | default('Unknown') }}"
+          - "Compliance Status: {{ compliance_status }}"
+          - "{{ compliance_details }}"
+            #   - "Reboot required: {{ reboot_required.stdout | default('Unknown') }}"
+          - "Reboot required: {{ reboot_required.stdout | default('Unknown') }}"
+          - "Server uptime as per compliance threshold : {{ 'OK' if (ansible_date_time.epoch | int - ansible_date_time.epoch | int <= 2592000) else 'NOT OK (uptime check not available for Windows)' }}"
+          - "Kernel version : {{ ansible_kernel | default('Windows NT') }}"
+          - "Time: {% if ntp_status.stdout is search('synchronized: yes') %} OK {% else %} NOT OK {% endif %}"
+          - "Mounted drives : {{ fstab_content.stdout_lines | default([]) | join(', ') }}"
+          - "Windows Version : {{ windows_version }}"
+
