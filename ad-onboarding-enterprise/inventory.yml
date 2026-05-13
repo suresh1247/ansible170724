@@ -1,0 +1,25 @@
+---
+all:
+  children:
+    domain_controllers:
+      hosts:
+        windows-vm.nat.net:
+          ansible_host: 10.0.3.6
+          ansible_user: adminuser
+          ansible_password: "AdminP@ssw0rd"  # Use ansible-vault for production
+          ansible_connection: winrm
+          ansible_winrm_transport: ntlm
+          ansible_winrm_server_cert_validation: ignore
+          ansible_port: 5985  # WinRM HTTPS (recommended)
+          # Alternative HTTP port (less secure):
+          # ansible_port: 5985
+          # ansible_winrm_transport: ntlm
+        
+
+# Alternative: Group variables for all Windows hosts
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: ntlm
+    ansible_winrm_server_cert_validation: ignore
+    ansible_winrm_operation_timeout_sec: 60
+    ansible_winrm_read_timeout_sec: 120

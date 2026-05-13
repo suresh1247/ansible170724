@@ -1,0 +1,485 @@
+---
+- name: ACTIVE DIRECTORY ONBOARDING PLAYBOOK
+  hosts: all
+  gather_facts: no
+  vars:
+    # Required input variables
+    server_name: "{{ server_name | mandatory }}"
+    domain_name: "{{ domain_name | mandatory }}"
+    application_name: "{{ application_name | mandatory }}"
+    requester_confirmation: "{{ requester_confirmation | mandatory }}"
+    
+    # Derived variables
+    ou_base_dn: "DC={{ domain_name.replace('.', ',DC=') }}"
+
+  tasks:
+    - name: STEP 1 - Search for server in AD
+      ansible.windows.win_powershell:
+        script: |
+          try {
+              $ServerName = "{{ server_name }}"
+              $DomainController = "{{ domain_name }}"
+              $Result = Get-ADComputer -Filter "Name -eq '$ServerName'" `
+                  -Properties Name, DistinguishedName `
+                  -Server $DomainController `
+                  -ErrorAction SilentlyContinue
+              if ($Result) {
+                  Write-Output "EXISTS:$($Result.DistinguishedName)"
+              } else {
+                  Write-Output "NOT_FOUND"
+              }
+          }
+          catch {
+              Write-Error "Failed to search for server: $($_.Exception.Message)"
+              exit 1
+          }
+      register: ad_server_search
+      ignore_errors: yes
+
+    - name: STEP 1.1 - Parse search result
+      ansible.builtin.set_fact:
+        server_exists: "{{ 'EXISTS' in ad_server_search.output }}"
+        server_dn: "{{ ad_server_search.output.split(':')[1] if 'EXISTS' in ad_server_search.output else '' }}"
+
+    - name: STEP 1.2 - Display server status
+      ansible.builtin.debug:
+        msg: "Server {{ server_name }} found in AD: {{ server_exists }}"
+
+    - name: STEP 1.3 - End playbook if server not found and confirmation is NO
+      ansible.builtin.meta: end_play
+      when: 
+        - not server_exists
+        - requester_confirmation | upper == 'NO'
+
+    - name: STEP 1.4 - Continue message when server not found but confirmation is YES
+      ansible.builtin.debug:
+        msg: "Server {{ server_name }} not found in AD but confirmation is YES. Continuing with OU and GPO creation only."
+      when: 
+        - not server_exists
+        - requester_confirmation | upper == 'YES'
+
+    - name: STEP 2 - Determine server type
+      ansible.builtin.set_fact:
+        server_type: "{{ 'SQL' if 'SQL' in server_name | upper else 'NON-SQL' }}"
+        
+    - name: STEP 2.1 - Display server type
+      ansible.builtin.debug:
+        msg: "Server Type: {{ server_type }}"
+
+    - name: STEP 3 - Build target OU path
+      ansible.builtin.set_fact:
+        target_ou_dn: >-
+          {{
+            ('OU=' + application_name + ',OU=SQL,OU=Servers,OU=LKM,' + ou_base_dn)
+            if server_type == 'SQL'
+            else ('OU=' + application_name + ',OU=Servers,OU=LKM,' + ou_base_dn)
+          }}
+
+    - name: STEP 3.1 - Display target OU
+      ansible.builtin.debug:
+        msg: "Target Application OU: {{ target_ou_dn }}"
+
+    - name: STEP 4 - Search for Application OU
+      ansible.windows.win_powershell:
+        script: |
+          try {
+              $OUName = "{{ application_name }}"
+              $DomainController = "{{ domain_name }}"
+              $SearchBase = "{{ ou_base_dn }}"
+              
+              $Result = Get-ADOrganizationalUnit -Filter "Name -eq '$OUName'" `
+                  -Properties Name, DistinguishedName `
+                  -Server $DomainController `
+                  -ErrorAction SilentlyContinue
+              
+              if ($Result) {
+                  Write-Output "EXISTS:$($Result.DistinguishedName)"
+              } else {
+                  Write-Output "NOT_FOUND"
+              }
+          }
+          catch {
+              Write-Error "Failed to search for application OU: $($_.Exception.Message)"
+              exit 1
+          }
+      register: app_ou_search
+      
+    - name: STEP 4.1 - Parse OU search result
+      ansible.builtin.set_fact:
+        app_ou_exists: "{{ 'EXISTS' in app_ou_search.output }}"
+        app_ou_path: "{{ app_ou_search.output.split(':')[1] if 'EXISTS' in app_ou_search.output else '' }}"
+
+    - name: STEP 5 - Create OU hierarchy
+      ansible.windows.win_powershell:
+        script: |
+          try {
+              $DomainController = "{{ domain_name }}"
+              $BaseDN = "{{ ou_base_dn }}"
+              $ServerType = "{{ server_type }}"
+              
+              # Create LKM OU if not exists
+              $LKM_OU = "OU=LKM,$BaseDN"
+              $LKM_Exists = Get-ADOrganizationalUnit -Filter "Name -eq 'LKM'" `
+                  -Server $DomainController `
+                  -ErrorAction SilentlyContinue
+              
+              if (-not $LKM_Exists) {
+                  New-ADOrganizationalUnit -Name "LKM" `
+                      -Path $BaseDN `
+                      -Server $DomainController `
+                      -Description "LKM Root OU for server management"
+                  Write-Output "Created OU: LKM"
+              }
+              
+              # Create Servers OU under LKM
+              $Servers_OU = "OU=Servers,OU=LKM,$BaseDN"
+              $Servers_Exists = Get-ADOrganizationalUnit -Filter "Name -eq 'Servers'" `
+                  -Server $DomainController `
+                  -SearchBase "OU=LKM,$BaseDN" `
+                  -ErrorAction SilentlyContinue
+              
+              if (-not $Servers_Exists) {
+                  New-ADOrganizationalUnit -Name "Servers" `
+                      -Path "OU=LKM,$BaseDN" `
+                      -Server $DomainController `
+                      -Description "Container for all server OUs"
+                  Write-Output "Created OU: Servers"
+              }
+              
+              # Create SQL OU for SQL servers
+              if ($ServerType -eq "SQL") {
+                  $SQL_OU = "OU=SQL,OU=Servers,OU=LKM,$BaseDN"
+                  $SQL_Exists = Get-ADOrganizationalUnit -Filter "Name -eq 'SQL'" `
+                      -Server $DomainController `
+                      -SearchBase "OU=Servers,OU=LKM,$BaseDN" `
+                      -ErrorAction SilentlyContinue
+                  
+                  if (-not $SQL_Exists) {
+                      New-ADOrganizationalUnit -Name "SQL" `
+                          -Path "OU=Servers,OU=LKM,$BaseDN" `
+                          -Server $DomainController `
+                          -Description "Container for SQL server OUs"
+                      Write-Output "Created OU: SQL"
+                  }
+              }
+              
+              # Create Application OU
+              $App_OU = "{{ target_ou_dn }}"
+              $App_Exists = Get-ADOrganizationalUnit -Filter "Name -eq '{{ application_name }}'" `
+                  -Server $DomainController `
+                  -ErrorAction SilentlyContinue
+              
+              if (-not $App_Exists) {
+                  $ParentPath = if ($ServerType -eq "SQL") {
+                      "OU=SQL,OU=Servers,OU=LKM,$BaseDN"
+                  } else {
+                      "OU=Servers,OU=LKM,$BaseDN"
+                  }
+                  
+                  New-ADOrganizationalUnit -Name "{{ application_name }}" `
+                      -Path $ParentPath `
+                      -Server $DomainController `
+                      -Description "OU for {{ application_name }} application servers"
+                  Write-Output "Created OU: {{ application_name }}"
+              }
+              else {
+                  Write-Output "Application OU already exists: {{ target_ou_dn }}"
+              }
+          }
+          catch {
+              Write-Error "Failed to create OU structure: $($_.Exception.Message)"
+              exit 1
+          }
+      when: not app_ou_exists
+      register: ou_creation
+
+    - name: STEP 5.1 - Refresh OU path after creation
+      ansible.windows.win_powershell:
+        script: |
+          try {
+              $DomainController = "{{ domain_name }}"
+              $Result = Get-ADOrganizationalUnit -Filter "Name -eq '{{ application_name }}'" `
+                  -Properties DistinguishedName `
+                  -Server $DomainController `
+                  -ErrorAction SilentlyContinue
+              
+              if ($Result) {
+                  Write-Output "FOUND:$($Result.DistinguishedName)"
+              }
+          }
+          catch {
+              Write-Error "Failed to refresh OU path: $($_.Exception.Message)"
+          }
+      when: not app_ou_exists
+      register: refreshed_ou
+      ignore_errors: yes
+
+    - name: STEP 5.2 - Update OU path if refreshed
+      ansible.builtin.set_fact:
+        app_ou_path: "{{ refreshed_ou.output.split(':')[1] if (not app_ou_exists and refreshed_ou.output is defined and 'FOUND' in refreshed_ou.output) else app_ou_path }}"
+      when: not app_ou_exists
+
+    - name: STEP 6 - Move server to Application OU
+      ansible.windows.win_powershell:
+        script: |
+          try {
+              $ServerDN = "{{ server_dn }}"
+              $TargetOU = "{{ app_ou_path if app_ou_path else target_ou_dn }}"
+              $DomainController = "{{ domain_name }}"
+              
+              if (-not $ServerDN) {
+                  Write-Output "SERVER_NOT_IN_AD"
+                  exit 0
+              }
+              
+              # Get current server location
+              $CurrentOU = Get-ADComputer -Identity $ServerDN `
+                  -Properties DistinguishedName `
+                  -Server $DomainController
+              
+              if ($CurrentOU.DistinguishedName -ne $TargetOU) {
+                  Move-ADObject -Identity $ServerDN `
+                      -TargetPath $TargetOU `
+                      -Server $DomainController `
+                      -Confirm:$false
+                  Write-Output "MOVED:$TargetOU"
+              }
+              else {
+                  Write-Output "ALREADY_IN_CORRECT_OU:$TargetOU"
+              }
+          }
+          catch {
+              Write-Error "Failed to move server: $($_.Exception.Message)"
+              exit 1
+          }
+      when: server_exists
+      register: server_move
+
+    - name: STEP 6.1 - Display server move status
+      ansible.builtin.debug:
+        msg: "Server move status: {{ server_move.output | default('Server not in AD') }}"
+      when: server_exists
+
+    - name: STEP 7 - Set app prefix
+      ansible.builtin.set_fact:
+        app_prefix: "{{ application_name[:3] | upper }}"
+
+    - name: STEP 7.1 - Set AD group name
+      ansible.builtin.set_fact:
+        ad_group_name: >-
+          {{
+            (app_prefix + '-PAM-' + application_name + 'SQL')
+            if server_type == 'SQL'
+            else (app_prefix + '-PAM-' + application_name)
+          }}
+
+    - name: STEP 7.2 - Display AD group name
+      ansible.builtin.debug:
+        msg: "Creating AD Group: {{ ad_group_name }}"
+
+    - name: STEP 7.3 - Create PAM Groups OU if not exists
+      ansible.windows.win_powershell:
+        script: |
+          try {
+              $DomainController = "{{ domain_name }}"
+              $BaseDN = "{{ ou_base_dn }}"
+              $PAM_OU = "OU=PAM-Groups,$BaseDN"
+              
+              # Check if PAM-Groups OU exists
+              $PAM_Exists = Get-ADOrganizationalUnit -Filter "Name -eq 'PAM-Groups'" `
+                  -Server $DomainController `
+                  -ErrorAction SilentlyContinue
+              
+              if (-not $PAM_Exists) {
+                  New-ADOrganizationalUnit -Name "PAM-Groups" `
+                      -Path $BaseDN `
+                      -Server $DomainController `
+                      -Description "Container for all PAM security groups"
+                  Write-Output "CREATED_PAM_OU"
+              }
+              else {
+                  Write-Output "PAM_OU_EXISTS"
+              }
+          }
+          catch {
+              Write-Error "Failed to create PAM-Groups OU: $($_.Exception.Message)"
+              exit 1
+          }
+      register: pam_ou_creation
+
+    - name: STEP 7.4 - Create AD group in PAM-Groups OU
+      ansible.windows.win_powershell:
+        script: |
+          try {
+              $GroupName = "{{ ad_group_name }}"
+              $GroupPath = "OU=PAM-Groups,{{ ou_base_dn }}"
+              $DomainController = "{{ domain_name }}"
+              
+              # Check if group already exists
+              $ExistingGroup = Get-ADGroup -Filter "Name -eq '$GroupName'" `
+                  -Server $DomainController `
+                  -ErrorAction SilentlyContinue
+              
+              if (-not $ExistingGroup) {
+                  New-ADGroup -Name $GroupName `
+                      -GroupScope Global `
+                      -GroupCategory Security `
+                      -Path $GroupPath `
+                      -Server $DomainController `
+                      -Description "PAM group for {{ application_name }} ({{ server_type }} server)"
+                  Write-Output "CREATED:$GroupName in $GroupPath"
+              }
+              else {
+                  Write-Output "EXISTS:$GroupName"
+              }
+          }
+          catch {
+              Write-Error "Failed to create AD group: $($_.Exception.Message)"
+              exit 1
+          }
+      register: group_creation
+
+    - name: STEP 8 - Create GPO name
+      ansible.builtin.set_fact:
+        gpo_name: >-
+          {{
+            (app_prefix + '-SRV-' + application_name + 'SQL')
+            if server_type == 'SQL'
+            else (app_prefix + '-SRV-' + application_name)
+          }}
+          
+    - name: STEP 8.1 - Display GPO name
+      ansible.builtin.debug:
+        msg: "Creating GPO: {{ gpo_name }}"
+
+    - name: STEP 9 - Check if GPO exists
+      ansible.windows.win_powershell:
+        script: |
+          try {
+              $GPOName = "{{ gpo_name }}"
+              $DomainController = "{{ domain_name }}"
+              
+              $ExistingGPO = Get-GPO -Name $GPOName `
+                  -Domain $DomainController `
+                  -ErrorAction SilentlyContinue
+              
+              if ($ExistingGPO) {
+                  Write-Output "EXISTS:$($ExistingGPO.Id)"
+              }
+              else {
+                  Write-Output "NOT_FOUND"
+              }
+          }
+          catch {
+              Write-Error "Failed to check GPO existence: $($_.Exception.Message)"
+              exit 1
+          }
+      register: gpo_check
+
+    - name: STEP 9.1 - Parse GPO check result
+      ansible.builtin.set_fact:
+        gpo_exists: "{{ 'EXISTS' in gpo_check.output }}"
+        gpo_id: "{{ gpo_check.output.split(':')[1] if 'EXISTS' in gpo_check.output else '' }}"
+
+    - name: STEP 10 - Create GPO if not exists
+      ansible.windows.win_powershell:
+        script: |
+          try {
+              $GPOName = "{{ gpo_name }}"
+              $DomainController = "{{ domain_name }}"
+              
+              New-GPO -Name $GPOName `
+                  -Domain $DomainController `
+                  -Comment "GPO for {{ application_name }} ({{ server_type }} server)"
+              
+              Write-Output "CREATED:$GPOName"
+          }
+          catch {
+              Write-Error "Failed to create GPO: $($_.Exception.Message)"
+              exit 1
+          }
+      when: not gpo_exists
+      register: gpo_creation
+
+    - name: STEP 11 - Link GPO to Application OU
+      ansible.windows.win_powershell:
+        script: |
+          try {
+              $GPOName = "{{ gpo_name }}"
+              $TargetOU = "{{ app_ou_path if app_ou_path else target_ou_dn }}"
+              $DomainController = "{{ domain_name }}"
+              
+              # Get current links for the OU
+              $CurrentLinks = Get-GPInheritance -Target $TargetOU `
+                  -Domain $DomainController `
+                  -ErrorAction SilentlyContinue
+              
+              $AlreadyLinked = $false
+              if ($CurrentLinks) {
+                  $AlreadyLinked = $CurrentLinks.GpoLinks | Where-Object { $_.DisplayName -eq $GPOName }
+              }
+              
+              if (-not $AlreadyLinked) {
+                  New-GPLink -Name $GPOName `
+                      -Target $TargetOU `
+                      -Domain $DomainController `
+                      -LinkEnabled Yes
+                  Write-Output "LINKED:$TargetOU"
+              }
+              else {
+                  Write-Output "ALREADY_LINKED:$TargetOU"
+              }
+          }
+          catch {
+              Write-Error "Failed to link GPO: $($_.Exception.Message)"
+              exit 1
+          }
+      register: gpo_link
+
+    - name: STEP 12 - Final Status Report
+      ansible.builtin.debug:
+        msg:
+          - "======================================================"
+          - "ACTIVE DIRECTORY ONBOARDING COMPLETED SUCCESSFULLY"
+          - "======================================================"
+          - "Server: {{ server_name }}"
+          - "Domain: {{ domain_name }}"
+          - "Application: {{ application_name }}"
+          - "Server Type: {{ server_type }}"
+          - "Target OU: {{ target_ou_dn }}"
+          - ""
+          - "OU Status:"
+          - "  - Application OU: {{ '[EXISTS]' if app_ou_exists else '[CREATED]' }} - {{ app_ou_path if app_ou_path else target_ou_dn }}"
+          - "  - PAM Groups OU: {{ pam_ou_creation.output | default('EXISTS') }} - OU=PAM-Groups,{{ ou_base_dn }}"
+          - ""
+          - "Server Status:"
+          - "  - Server in AD: {{ 'YES' if server_exists else 'NO' }}"
+          - "  - Server Move: {{ server_move.output | default('Server not in AD - No move performed') if not server_exists else server_move.output | default('N/A') }}"
+          - "  - Confirmation Provided: {{ requester_confirmation | upper }}"
+          - ""
+          - "Group Status:"
+          - "  - Group Name: {{ ad_group_name }}"
+          - "  - Group Location: OU=PAM-Groups,{{ ou_base_dn }}"
+          - "  - Group Status: {{ group_creation.output | default('ERROR') }}"
+          - ""
+          - "GPO Status:"
+          - "  - GPO Name: {{ gpo_name }}"
+          - "  - GPO Status: {{ '[EXISTS]' if gpo_exists else '[CREATED]' }}"
+          - "  - GPO Link: {{ gpo_link.output | default('N/A') }}"
+          - ""
+          - "Configuration Summary:"
+          - "  - Server OU Path: LKM → Servers → {{ 'SQL → ' if server_type == 'SQL' else '' }}{{ application_name }}"
+          - "  - Group Location: PAM-Groups (domain root)"
+          - "  - Group Naming: {{ app_prefix }}-PAM-{{ application_name }}{{ 'SQL' if server_type == 'SQL' else '' }}"
+          - "  - GPO Naming: {{ app_prefix }}-SRV-{{ application_name }}{{ 'SQL' if server_type == 'SQL' else '' }}"
+          - "======================================================"
+
+    - name: STEP 13 - Error handling summary
+      ansible.builtin.fail:
+        msg: "Playbook completed with errors. Please check debug output above."
+      when: 
+        - ad_server_search is failed or 
+          app_ou_search is failed or 
+          group_creation is failed or
+          gpo_link is failed
+      ignore_errors: yes

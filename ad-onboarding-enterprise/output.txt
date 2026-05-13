@@ -1,0 +1,146 @@
+
+PLAY [ACTIVE DIRECTORY ONBOARDING PLAYBOOK] ************************************
+
+TASK [STEP 1 - Search for server in AD] ****************************************
+changed: [windows-vm.nat.net]
+
+TASK [STEP 1.1 - Parse search result] ******************************************
+ok: [windows-vm.nat.net]
+
+TASK [STEP 1.2 - Display server status] ****************************************
+ok: [windows-vm.nat.net] => {
+    "msg": [
+        "Server WINSERVER1 found in AD: True",
+        "Server DN: CN=WINSERVER1,OU=Vikas38,OU=Servers,OU=LKM,DC=nat,DC=net\r\n",
+        "Raw stdout: EXISTS:CN=WINSERVER1,OU=Vikas38,OU=Servers,OU=LKM,DC=nat,DC=net\r\n"
+    ]
+}
+
+TASK [STEP 1.3 - End playbook if server not found and confirmation is NO] ******
+skipping: [windows-vm.nat.net]
+
+TASK [STEP 1.4 - Continue message when server not found but confirmation is YES] ***
+skipping: [windows-vm.nat.net]
+
+TASK [STEP 2 - Determine server type] ******************************************
+ok: [windows-vm.nat.net]
+
+TASK [STEP 2.1 - Display server type] ******************************************
+ok: [windows-vm.nat.net] => {
+    "msg": "Server Type: NON-SQL"
+}
+
+TASK [STEP 3 - Build target OU path] *******************************************
+ok: [windows-vm.nat.net]
+
+TASK [STEP 3.1 - Display target OU] ********************************************
+ok: [windows-vm.nat.net] => {
+    "msg": "Target Application OU: OU=Vikas39,OU=Servers,OU=LKM,DC=nat,DC=net"
+}
+
+TASK [STEP 4 - Search for Application OU] **************************************
+changed: [windows-vm.nat.net]
+
+TASK [STEP 4.1 - Parse OU search result] ***************************************
+ok: [windows-vm.nat.net]
+
+TASK [STEP 5 - Create OU hierarchy] ********************************************
+changed: [windows-vm.nat.net]
+
+TASK [STEP 5.1 - Refresh OU path after creation] *******************************
+changed: [windows-vm.nat.net]
+
+TASK [STEP 5.2 - Update OU path if refreshed] **********************************
+ok: [windows-vm.nat.net]
+
+TASK [STEP 6 - Move server to Application OU] **********************************
+changed: [windows-vm.nat.net]
+
+TASK [STEP 6.1 - Display server move status] ***********************************
+ok: [windows-vm.nat.net] => {
+    "msg": "Server move status: ['CURRENT_PARENT:OU=Vikas38,OU=Servers,OU=LKM,DC=nat,DC=net', 'TARGET_OU:OU=Vikas39,OU=Servers,OU=LKM,DC=nat,DC=net', 'MOVED_SUCCESSFULLY:FROM=OU=Vikas38,OU=Servers,OU=LKM,DC=nat,DC=net|TO=OU=Vikas39,OU=Servers,OU=LKM,DC=nat,DC=net']"
+}
+
+TASK [STEP 7 - Set app prefix] *************************************************
+ok: [windows-vm.nat.net]
+
+TASK [STEP 7.1 - Set AD group name] ********************************************
+ok: [windows-vm.nat.net]
+
+TASK [STEP 7.2 - Display AD group name] ****************************************
+ok: [windows-vm.nat.net] => {
+    "msg": "Creating AD Group: VIK-PAM-Vikas39"
+}
+
+TASK [STEP 7.3 - Create PAM Groups OU if not exists] ***************************
+changed: [windows-vm.nat.net]
+
+TASK [STEP 7.4 - Create AD group in PAM-Groups OU] *****************************
+changed: [windows-vm.nat.net]
+
+TASK [STEP 8 - Create GPO name] ************************************************
+ok: [windows-vm.nat.net]
+
+TASK [STEP 8.1 - Display GPO name] *********************************************
+ok: [windows-vm.nat.net] => {
+    "msg": "Creating GPO: VIK-SRV-Vikas39"
+}
+
+TASK [STEP 9 - Check if GPO exists] ********************************************
+changed: [windows-vm.nat.net]
+
+TASK [STEP 9.1 - Parse GPO check result] ***************************************
+ok: [windows-vm.nat.net]
+
+TASK [STEP 10 - Create GPO if not exists] **************************************
+changed: [windows-vm.nat.net]
+
+TASK [STEP 11 - Link GPO to Application OU] ************************************
+changed: [windows-vm.nat.net]
+
+TASK [STEP 12 - Final Status Report] *******************************************
+ok: [windows-vm.nat.net] => {
+    "msg": [
+        "======================================================",
+        "ACTIVE DIRECTORY ONBOARDING COMPLETED SUCCESSFULLY",
+        "======================================================",
+        "Server: WINSERVER1",
+        "Domain: nat.net",
+        "Application: Vikas39",
+        "Server Type: NON-SQL",
+        "Target OU: OU=Vikas39,OU=Servers,OU=LKM,DC=nat,DC=net",
+        "",
+        "OU Status:",
+        "  - Application OU: [CREATED] - OU=Vikas39,OU=Servers,OU=LKM,DC=nat,DC=net",
+        "  - PAM Groups OU: ['PAM_OU_EXISTS'] - OU=PAM-Groups,DC=nat,DC=net",
+        "",
+        "Server Status:",
+        "  - Server in AD: YES",
+        "  - Server Move: N/A",
+        "  - Confirmation Provided: YES",
+        "",
+        "Group Status:",
+        "  - Group Name: VIK-PAM-Vikas39",
+        "  - Group Location: OU=PAM-Groups,DC=nat,DC=net",
+        "  - Group Status: ['CREATED:VIK-PAM-Vikas39 in OU=PAM-Groups,DC=nat,DC=net']",
+        "",
+        "GPO Status:",
+        "  - GPO Name: VIK-SRV-Vikas39",
+        "  - GPO Status: [CREATED]",
+        "  - GPO Link: [{'Enabled': True, 'Order': 1, 'GpoDomainName': 'nat.net', 'Target': 'OU=Vikas39,OU=Servers,OU=LKM,DC=nat,DC=net', 'Enforced': False, 'GpoId': '11c06d7f-41de-41bb-9f0f-8a3cb55bd67c', 'DisplayName': 'VIK-SRV-Vikas39'}, 'LINKED:OU=Vikas39,OU=Servers,OU=LKM,DC=nat,DC=net']",
+        "",
+        "Configuration Summary:",
+        "  - Server OU Path: LKM → Servers → Vikas39",
+        "  - Group Location: PAM-Groups (domain root)",
+        "  - Group Naming: VIK-PAM-Vikas39",
+        "  - GPO Naming: VIK-SRV-Vikas39",
+        "======================================================"
+    ]
+}
+
+TASK [STEP 13 - Error handling summary] ****************************************
+skipping: [windows-vm.nat.net]
+
+PLAY RECAP *********************************************************************
+windows-vm.nat.net         : ok=26   changed=10   unreachable=0    failed=0    skipped=2    rescued=0    ignored=0   
+
