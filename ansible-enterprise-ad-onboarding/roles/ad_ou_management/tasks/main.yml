@@ -1,0 +1,94 @@
+---
+- name: OU | Determine server type and target path
+  block:
+    - name: Determine server type
+      ansible.builtin.set_fact:
+        server_type: "{{ 'SQL' if 'SQL' in server_name | upper else 'NON-SQL' }}"
+
+    - name: Build target OU path
+      ansible.builtin.set_fact:
+        target_ou_dn: >-
+          {{
+            ('OU=' + application_name + ',OU=SQL,OU=Servers,OU=LKM,' + ou_base_dn)
+            if server_type == 'SQL'
+            else ('OU=' + application_name + ',OU=Servers,OU=LKM,' + ou_base_dn)
+          }}
+
+    - name: Display target OU
+      ansible.builtin.debug:
+        msg: "Target Application OU: {{ target_ou_dn }}"
+
+- name: OU | Search for Application OU
+  ansible.windows.win_shell: |
+    $OUName = "{{ application_name }}"
+    $Result = Get-ADOrganizationalUnit -Filter "Name -eq '$OUName'" `
+        -Properties DistinguishedName `
+        -Server "{{ domain_name }}" `
+        -ErrorAction SilentlyContinue
+    
+    if ($Result) {
+        Write-Output "EXISTS:$($Result.DistinguishedName)"
+    } else {
+        Write-Output "NOT_FOUND"
+    }
+  register: app_ou_search
+
+- name: OU | Parse OU search result
+  ansible.builtin.set_fact:
+    app_ou_exists: "{{ 'EXISTS' in app_ou_search.stdout }}"
+    app_ou_path: "{{ app_ou_search.stdout.split(':')[1] if 'EXISTS' in app_ou_search.stdout else '' }}"
+
+- name: OU | Create OU hierarchy
+  block:
+    - name: Create OU structure
+      ansible.windows.win_shell: |
+        $BaseDN = "{{ ou_base_dn }}"
+        $ServerType = "{{ server_type }}"
+        
+        # Create LKM OU
+        $LKM_Exists = Get-ADOrganizationalUnit -Filter "Name -eq 'LKM'" -ErrorAction SilentlyContinue
+        if (-not $LKM_Exists) {
+            New-ADOrganizationalUnit -Name "LKM" -Path $BaseDN -Description "LKM Root OU for server management"
+            Write-Output "Created LKM OU"
+        }
+        
+        # Create Servers OU
+        $Servers_Exists = Get-ADOrganizationalUnit -Filter "Name -eq 'Servers'" -SearchBase "OU=LKM,$BaseDN" -ErrorAction SilentlyContinue
+        if (-not $Servers_Exists) {
+            New-ADOrganizationalUnit -Name "Servers" -Path "OU=LKM,$BaseDN" -Description "Container for all server OUs"
+            Write-Output "Created Servers OU"
+        }
+        
+        # Create SQL OU if needed
+        if ($ServerType -eq "SQL") {
+            $SQL_Exists = Get-ADOrganizationalUnit -Filter "Name -eq 'SQL'" -SearchBase "OU=Servers,OU=LKM,$BaseDN" -ErrorAction SilentlyContinue
+            if (-not $SQL_Exists) {
+                New-ADOrganizationalUnit -Name "SQL" -Path "OU=Servers,OU=LKM,$BaseDN" -Description "Container for SQL server OUs"
+                Write-Output "Created SQL OU"
+            }
+        }
+        
+        # Create Application OU
+        $App_OU = "{{ target_ou_dn }}"
+        $App_Exists = Get-ADOrganizationalUnit -Filter "Name -eq '{{ application_name }}'" -ErrorAction SilentlyContinue
+        if (-not $App_Exists) {
+            $ParentPath = if ($ServerType -eq "SQL") {
+                "OU=SQL,OU=Servers,OU=LKM,$BaseDN"
+            } else {
+                "OU=Servers,OU=LKM,$BaseDN"
+            }
+            New-ADOrganizationalUnit -Name "{{ application_name }}" -Path $ParentPath -Description "OU for {{ application_name }} application servers"
+            Write-Output "Created Application OU: {{ application_name }}"
+        }
+      register: ou_creation
+
+    - name: Set OU created flag
+      ansible.builtin.set_fact:
+        app_ou_created: true
+        app_ou_path: "{{ target_ou_dn }}"
+
+    - name: Display OU creation status
+      ansible.builtin.debug:
+        msg: "{{ ou_creation.stdout_lines }}"
+
+  when: not app_ou_exists

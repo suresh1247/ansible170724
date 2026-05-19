@@ -1,0 +1,21 @@
+---
+- name: TEST AD CONNECTION WITH VAULT
+  hosts: all
+  gather_facts: no
+  vars_files:
+    - ../vault.yml
+
+  vars:
+    ansible_user: "adminuser"
+    ansible_password: "{{ ad_credentials.vault_ad_password }}"
+    ansible_connection: winrm
+    ansible_winrm_transport: ntlm
+    ansible_winrm_server_cert_validation: ignore
+    ansible_port: 5985
+
+  tasks:
+    - name: Test connection
+      ansible.windows.win_ping:
+
+    - name: Show who I am
+      ansible.windows.win_whoami:

@@ -1,0 +1,339 @@
+---
+- name: ENTERPRISE ACTIVE DIRECTORY ONBOARDING
+  hosts: domain_controllers
+  gather_facts: yes
+  gather_subset:
+    - min
+  vars_files:
+    - vault.yml
+  
+  vars:
+    operation_id: "{{ lookup('password', '/dev/null length=12 chars=hex') | upper }}"
+    operation_timestamp: "{{ ansible_date_time.iso8601 }}"
+    env: "production"
+    server_name_pattern: '^[A-Za-z0-9-]{3,15}$'
+    app_name_pattern: '^[A-Za-z][A-Za-z0-9_]{2,30}$'
+    enable_audit_logging: false  # Disabled for now
+    ad_retries: 3
+    ad_delay: 5
+    ou_base_dn: "DC={{ domain_name.replace('.', ',DC=') }}"
+
+  tasks:
+    - name: Validate input parameters
+      block:
+        - name: Check server name format
+          ansible.builtin.assert:
+            that:
+              - server_name is match(server_name_pattern)
+            fail_msg: "Invalid server name: {{ server_name }}"
+            success_msg: "✓ Server name validation passed"
+
+        - name: Check application name format
+          ansible.builtin.assert:
+            that:
+              - application_name is match(app_name_pattern)
+            fail_msg: "Invalid application name: {{ application_name }}"
+            success_msg: "✓ Application name validation passed"
+
+        - name: Validate confirmation flag
+          ansible.builtin.assert:
+            that:
+              - requester_confirmation | upper in ['YES', 'NO']
+            fail_msg: "Requester confirmation must be YES or NO"
+            success_msg: "✓ Confirmation flag validated"
+
+    - name: Display connection info
+      ansible.builtin.debug:
+        msg:
+          - "Connected to: {{ ansible_hostname }}"
+          - "IP: {{ ansible_default_ipv4.address | default('N/A') }}"
+          - "OS: {{ ansible_os_name }}"
+          - "Domain: {{ ansible_domain | default('N/A') }}"
+
+    - name: Determine server type
+      ansible.builtin.set_fact:
+        server_type: "{{ 'SQL' if 'SQL' in server_name | upper else 'NON-SQL' }}"
+
+    - name: Build target OU path
+      ansible.builtin.set_fact:
+        target_ou_dn: >-
+          {{
+            ('OU=' + application_name + ',OU=SQL,OU=Servers,OU=LKM,' + ou_base_dn)
+            if server_type == 'SQL'
+            else ('OU=' + application_name + ',OU=Servers,OU=LKM,' + ou_base_dn)
+          }}
+
+    - name: Display target OU
+      ansible.builtin.debug:
+        msg: "Target Application OU: {{ target_ou_dn }}"
+
+    - name: Check Active Directory module
+      ansible.windows.win_shell: |
+        Import-Module ActiveDirectory -ErrorAction Stop
+        Get-ADDomain | Select-Object DNSRoot, DomainMode
+      register: ad_check
+      ignore_errors: yes
+
+    - name: Verify AD module is available
+      ansible.builtin.fail:
+        msg: "ActiveDirectory module is not available on this system"
+      when: ad_check is failed
+
+    - name: Display AD info
+      ansible.builtin.debug:
+        msg: "AD Domain: {{ ad_check.stdout_lines[0] }}"
+
+    - name: Create LKM OU
+      ansible.windows.win_shell: |
+        Import-Module ActiveDirectory -ErrorAction Stop
+        $BaseDN = "{{ ou_base_dn }}"
+        $LKM_Exists = Get-ADOrganizationalUnit -Filter "Name -eq 'LKM'" -ErrorAction SilentlyContinue
+        if (-not $LKM_Exists) {
+            New-ADOrganizationalUnit -Name "LKM" -Path $BaseDN -Description "LKM Root OU"
+            Write-Output "CREATED: LKM OU"
+        } else {
+            Write-Output "EXISTS: LKM OU"
+        }
+      register: lkm_ou
+      ignore_errors: yes
+
+    - name: Display LKM OU status
+      ansible.builtin.debug:
+        msg: "{{ lkm_ou.stdout }}"
+
+    - name: Create Servers OU
+      ansible.windows.win_shell: |
+        Import-Module ActiveDirectory -ErrorAction Stop
+        $BaseDN = "{{ ou_base_dn }}"
+        $Servers_Exists = Get-ADOrganizationalUnit -Filter "Name -eq 'Servers'" -SearchBase "OU=LKM,$BaseDN" -ErrorAction SilentlyContinue
+        if (-not $Servers_Exists) {
+            New-ADOrganizationalUnit -Name "Servers" -Path "OU=LKM,$BaseDN" -Description "Container for all server OUs"
+            Write-Output "CREATED: Servers OU"
+        } else {
+            Write-Output "EXISTS: Servers OU"
+        }
+      register: servers_ou
+      ignore_errors: yes
+
+    - name: Create SQL OU if needed
+      ansible.windows.win_shell: |
+        Import-Module ActiveDirectory -ErrorAction Stop
+        $BaseDN = "{{ ou_base_dn }}"
+        if ("{{ server_type }}" -eq "SQL") {
+            $SQL_Exists = Get-ADOrganizationalUnit -Filter "Name -eq 'SQL'" -SearchBase "OU=Servers,OU=LKM,$BaseDN" -ErrorAction SilentlyContinue
+            if (-not $SQL_Exists) {
+                New-ADOrganizationalUnit -Name "SQL" -Path "OU=Servers,OU=LKM,$BaseDN" -Description "Container for SQL server OUs"
+                Write-Output "CREATED: SQL OU"
+            } else {
+                Write-Output "EXISTS: SQL OU"
+            }
+        } else {
+            Write-Output "SKIPPED: Not a SQL server"
+        }
+      register: sql_ou
+      when: server_type == "SQL"
+      ignore_errors: yes
+
+    - name: Create Application OU
+      ansible.windows.win_shell: |
+        Import-Module ActiveDirectory -ErrorAction Stop
+        $BaseDN = "{{ ou_base_dn }}"
+        $App_Exists = Get-ADOrganizationalUnit -Filter "Name -eq '{{ application_name }}'" -ErrorAction SilentlyContinue
+        if (-not $App_Exists) {
+            $ParentPath = if ("{{ server_type }}" -eq "SQL") {
+                "OU=SQL,OU=Servers,OU=LKM,$BaseDN"
+            } else {
+                "OU=Servers,OU=LKM,$BaseDN"
+            }
+            New-ADOrganizationalUnit -Name "{{ application_name }}" -Path $ParentPath -Description "OU for {{ application_name }} application servers"
+            Write-Output "CREATED: Application OU {{ application_name }}"
+        } else {
+            Write-Output "EXISTS: Application OU {{ application_name }}"
+        }
+      register: app_ou
+      ignore_errors: yes
+
+    - name: Search for server in AD
+      ansible.windows.win_shell: |
+        Import-Module ActiveDirectory -ErrorAction SilentlyContinue
+        $Computer = Get-ADComputer -Filter "Name -eq '{{ server_name }}'" -Properties DistinguishedName -ErrorAction SilentlyContinue
+        if ($Computer) {
+            Write-Output "EXISTS|$($Computer.DistinguishedName)"
+        } else {
+            Write-Output "NOT_FOUND"
+        }
+      register: server_search
+
+    - name: Parse server search result
+      ansible.builtin.set_fact:
+        server_exists: "{{ 'EXISTS' in server_search.stdout }}"
+        server_dn: "{{ server_search.stdout.split('|')[1] if 'EXISTS' in server_search.stdout else '' }}"
+
+    - name: Display server status
+      ansible.builtin.debug:
+        msg: "Server {{ server_name }} found in AD: {{ server_exists }}"
+
+    - name: End playbook if server not found and confirmation is NO
+      ansible.builtin.meta: end_play
+      when: 
+        - not server_exists
+        - requester_confirmation | upper == 'NO'
+
+    - name: Move server to target OU
+      ansible.windows.win_shell: |
+        Import-Module ActiveDirectory -ErrorAction Stop
+        $TargetOU = "{{ target_ou_dn }}"
+        $Computer = Get-ADComputer -Identity "{{ server_name }}" -Properties DistinguishedName
+        $CurrentParent = ($Computer.DistinguishedName -split ',', 2)[1]
+        
+        if ($CurrentParent -ne $TargetOU) {
+            Move-ADObject -Identity $Computer.DistinguishedName -TargetPath $TargetOU -Confirm:$false
+            Write-Output "MOVED: $CurrentParent -> $TargetOU"
+        } else {
+            Write-Output "ALREADY_CORRECT: $CurrentParent"
+        }
+      when: server_exists
+      register: server_move
+      ignore_errors: yes
+
+    - name: Set app prefix
+      ansible.builtin.set_fact:
+        app_prefix: "{{ application_name[:3] | upper }}"
+
+    - name: Set AD group name
+      ansible.builtin.set_fact:
+        ad_group_name: >-
+          {{
+            (app_prefix + '-PAM-' + application_name + 'SQL')
+            if server_type == 'SQL'
+            else (app_prefix + '-PAM-' + application_name)
+          }}
+
+    - name: Create PAM Groups OU
+      ansible.windows.win_shell: |
+        Import-Module ActiveDirectory -ErrorAction Stop
+        $BaseDN = "{{ ou_base_dn }}"
+        $PAM_OU = "OU=PAM-Groups,$BaseDN"
+        $PAM_Exists = Get-ADOrganizationalUnit -Filter "Name -eq 'PAM-Groups'" -ErrorAction SilentlyContinue
+        if (-not $PAM_Exists) {
+            New-ADOrganizationalUnit -Name "PAM-Groups" -Path $BaseDN -Description "Container for all PAM security groups"
+            Write-Output "CREATED: PAM-Groups OU"
+        } else {
+            Write-Output "EXISTS: PAM-Groups OU"
+        }
+      register: pam_ou
+      ignore_errors: yes
+
+    - name: Create AD security group
+      ansible.windows.win_shell: |
+        Import-Module ActiveDirectory -ErrorAction Stop
+        $GroupName = "{{ ad_group_name }}"
+        $GroupPath = "OU=PAM-Groups,{{ ou_base_dn }}"
+        $ExistingGroup = Get-ADGroup -Filter "Name -eq '$GroupName'" -ErrorAction SilentlyContinue
+        if (-not $ExistingGroup) {
+            New-ADGroup -Name $GroupName -GroupScope Global -GroupCategory Security -Path $GroupPath -Description "PAM group for {{ application_name }}"
+            Write-Output "CREATED: $GroupName"
+        } else {
+            Write-Output "EXISTS: $GroupName"
+        }
+      register: group_creation
+      ignore_errors: yes
+
+    - name: Add opsintel user to group
+      ansible.windows.win_shell: |
+        Import-Module ActiveDirectory -ErrorAction Stop
+        $GroupName = "{{ ad_group_name }}"
+        $UserName = "opsintel"
+        
+        $UserExists = Get-ADUser -Filter "SamAccountName -eq '$UserName'" -ErrorAction SilentlyContinue
+        if (-not $UserExists) {
+            Write-Output "USER_NOT_FOUND: $UserName"
+            exit 0
+        }
+        
+        $IsMember = Get-ADGroupMember -Identity $GroupName -ErrorAction SilentlyContinue | Where-Object { $_.SamAccountName -eq $UserName }
+        if ($IsMember) {
+            Write-Output "ALREADY_MEMBER: $UserName"
+        } else {
+            Add-ADGroupMember -Identity $GroupName -Members $UserName
+            Write-Output "ADDED: $UserName to $GroupName"
+        }
+      register: opsintel_add
+      ignore_errors: yes
+
+    - name: Set GPO name
+      ansible.builtin.set_fact:
+        gpo_name: >-
+          {{
+            (app_prefix + '-SRV-' + application_name + 'SQL')
+            if server_type == 'SQL'
+            else (app_prefix + '-SRV-' + application_name)
+          }}
+
+    - name: Create GPO
+      ansible.windows.win_shell: |
+        Import-Module GroupPolicy -ErrorAction Stop
+        $GPOName = "{{ gpo_name }}"
+        $ExistingGPO = Get-GPO -Name $GPOName -ErrorAction SilentlyContinue
+        if (-not $ExistingGPO) {
+            New-GPO -Name $GPOName -Comment "GPO for {{ application_name }}"
+            Write-Output "CREATED: $GPOName"
+        } else {
+            Write-Output "EXISTS: $GPOName"
+        }
+      register: gpo_creation
+      ignore_errors: yes
+
+    - name: Link GPO to Application OU
+      ansible.windows.win_shell: |
+        Import-Module GroupPolicy -ErrorAction Stop
+        $GPOName = "{{ gpo_name }}"
+        $TargetOU = "{{ target_ou_dn }}"
+        
+        $CurrentLinks = Get-GPInheritance -Target $TargetOU -ErrorAction SilentlyContinue
+        $AlreadyLinked = $CurrentLinks.GpoLinks | Where-Object { $_.DisplayName -eq $GPOName }
+        
+        if (-not $AlreadyLinked) {
+            New-GPLink -Name $GPOName -Target $TargetOU -LinkEnabled Yes
+            Write-Output "LINKED: $GPOName to $TargetOU"
+        } else {
+            Write-Output "ALREADY_LINKED: $GPOName"
+        }
+      register: gpo_link
+      ignore_errors: yes
+
+  post_tasks:
+    - name: Final Status Report
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "ACTIVE DIRECTORY ONBOARDING COMPLETED"
+          - "=========================================="
+          - "Server: {{ server_name }}"
+          - "Domain: {{ domain_name }}"
+          - "Application: {{ application_name }}"
+          - "Server Type: {{ server_type }}"
+          - "Target OU: {{ target_ou_dn }}"
+          - "Operation ID: {{ operation_id }}"
+          - ""
+          - "OU Status:"
+          - "  - LKM OU: {{ lkm_ou.stdout | default('N/A') }}"
+          - "  - Servers OU: {{ servers_ou.stdout | default('N/A') }}"
+          - "  - Application OU: {{ app_ou.stdout | default('N/A') }}"
+          - ""
+          - "Server Status:"
+          - "  - Server in AD: {{ 'YES' if server_exists else 'NO' }}"
+          - "  - Server Move: {{ server_move.stdout | default('No move performed') }}"
+          - "  - Confirmation: {{ requester_confirmation | upper }}"
+          - ""
+          - "Group Status:"
+          - "  - Group Name: {{ ad_group_name }}"
+          - "  - Group Status: {{ group_creation.stdout | default('ERROR') }}"
+          - "  - opsintel User: {{ opsintel_add.stdout | default('N/A') }}"
+          - ""
+          - "GPO Status:"
+          - "  - GPO Name: {{ gpo_name }}"
+          - "  - GPO Status: {{ gpo_creation.stdout | default('N/A') }}"
+          - "  - GPO Link: {{ gpo_link.stdout | default('N/A') }}"
+          - "=========================================="
+

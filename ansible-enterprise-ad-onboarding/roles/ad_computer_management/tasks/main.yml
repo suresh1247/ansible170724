@@ -1,0 +1,67 @@
+---
+- name: COMPUTER | Search for server in AD
+  ansible.windows.win_shell: |
+    $Computer = Get-ADComputer -Filter "Name -eq '{{ server_name }}'" `
+        -Properties DistinguishedName, Enabled, LastLogonDate, OperatingSystem `
+        -Server "{{ domain_name }}" `
+        -ErrorAction SilentlyContinue
+    
+    if ($Computer) {
+        Write-Output "EXISTS|$($Computer.DistinguishedName)|$($Computer.Enabled)|$($Computer.LastLogonDate)|$($Computer.OperatingSystem)"
+    } else {
+        Write-Output "NOT_FOUND"
+    }
+  register: ad_server_search
+
+- name: COMPUTER | Parse server information
+  ansible.builtin.set_fact:
+    server_exists: "{{ 'EXISTS' in ad_server_search.stdout }}"
+    server_dn: "{{ ad_server_search.stdout.split('|')[1] if 'EXISTS' in ad_server_search.stdout else '' }}"
+    server_enabled: "{{ ad_server_search.stdout.split('|')[2] if 'EXISTS' in ad_server_search.stdout else false }}"
+
+- name: COMPUTER | End playbook if server not found and confirmation is NO
+  ansible.builtin.meta: end_play
+  when: 
+    - not server_exists
+    - requester_confirmation | upper == 'NO'
+
+- name: COMPUTER | Move server to target OU
+  block:
+    - name: Move computer object
+      ansible.windows.win_shell: |
+        $TargetOU = "{{ app_ou_path if app_ou_path else target_ou_dn }}"
+        $Computer = Get-ADComputer -Identity "{{ server_name }}" -Properties DistinguishedName -Server "{{ domain_name }}"
+        $CurrentParent = ($Computer.DistinguishedName -split ',', 2)[1]
+        
+        if ($CurrentParent -ne $TargetOU) {
+            Move-ADObject -Identity $Computer.DistinguishedName -TargetPath $TargetOU -Confirm:$false
+            Write-Output "MOVED|$CurrentParent|$TargetOU"
+        } else {
+            Write-Output "ALREADY_CORRECT|$CurrentParent"
+        }
+      register: server_move
+
+    - name: Set server moved flag
+      ansible.builtin.set_fact:
+        server_moved: "{{ 'MOVED' in server_move.stdout }}"
+
+    - name: Display move status
+      ansible.builtin.debug:
+        msg: "Server move status: {{ server_move.stdout }}"
+
+  when: server_exists
+
+- name: COMPUTER | Update computer attributes
+  ansible.windows.win_shell: |
+    Set-ADComputer -Identity "{{ server_name }}" `
+        -Replace @{
+            Description = "Application: {{ application_name }}, Server Type: {{ server_type }}, Onboarded: {{ operation_timestamp }}"
+            extensionAttribute1 = "{{ application_name }}"
+            extensionAttribute2 = "{{ server_type }}"
+            extensionAttribute3 = "{{ operation_id }}"
+            extensionAttribute4 = "{{ env }}"
+        } `
+        -Server "{{ domain_name }}"
+    Write-Output "ATTRIBUTES_UPDATED"
+  register: attribute_update
+  when: server_exists

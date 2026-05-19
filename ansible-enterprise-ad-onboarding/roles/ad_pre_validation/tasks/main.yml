@@ -1,0 +1,82 @@
+---
+- name: VALIDATION | Validate input parameters
+  block:
+    - name: Check server name format
+      ansible.builtin.assert:
+        that:
+          - server_name is match(server_name_pattern)
+          - server_name | length >= 3
+          - server_name | length <= 15
+        fail_msg: |
+          Invalid server name: {{ server_name }}
+          Requirements:
+          - 3-15 characters
+          - Alphanumeric and hyphens only
+        success_msg: "✓ Server name validation passed"
+
+    - name: Check application name format
+      ansible.builtin.assert:
+        that:
+          - application_name is match(app_name_pattern)
+          - application_name | length >= 3
+          - application_name | length <= 30
+        fail_msg: |
+          Invalid application name: {{ application_name }}
+          Requirements:
+          - 3-30 characters
+          - Letters, numbers, underscores only
+          - Must start with a letter
+        success_msg: "✓ Application name validation passed"
+
+    - name: Validate confirmation flag
+      ansible.builtin.assert:
+        that:
+          - requester_confirmation | upper in ['YES', 'NO']
+        fail_msg: "Requester confirmation must be YES or NO (got: {{ requester_confirmation }})"
+        success_msg: "✓ Confirmation flag validated"
+
+    - name: Validate domain name
+      ansible.builtin.assert:
+        that:
+          - domain_name | regex_search('^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
+        fail_msg: "Invalid domain name format: {{ domain_name }}"
+
+- name: CONNECTIVITY | Test AD connectivity
+  block:
+    - name: Test AD connection with retry
+      ansible.windows.win_shell: |
+        Import-Module ActiveDirectory -ErrorAction Stop
+        $DomainInfo = Get-ADDomain -Server "{{ domain_name }}" -ErrorAction Stop
+        Write-Output "SUCCESS|Domain:$($DomainInfo.DNSRoot)|Controllers:$($DomainInfo.ReplicaDirectoryServers.Count)"
+      register: ad_test
+      retries: "{{ ad_retries }}"
+      delay: "{{ ad_delay }}"
+
+    - name: Verify AD connection
+      ansible.builtin.fail:
+        msg: "Failed to connect to AD domain {{ domain_name }}"
+      when: "'SUCCESS' not in ad_test.stdout"
+
+    - name: Parse domain info
+      ansible.builtin.set_fact:
+        domain_fqdn: "{{ ad_test.stdout.split('|')[1].split(':')[1] }}"
+        dc_count: "{{ ad_test.stdout.split('|')[2].split(':')[1] }}"
+
+- name: PERMISSIONS | Validate account permissions
+  block:
+    - name: Check if account can read AD
+      ansible.windows.win_shell: |
+        Get-ADUser -Identity "{{ ansible_user }}" -Server "{{ domain_name }}" -ErrorAction Stop
+        Write-Output "PERMISSIONS_VALID"
+      register: perm_check
+      ignore_errors: yes
+
+    - name: Warn about permissions
+      ansible.builtin.debug:
+        msg: "WARNING: Unable to verify permissions. Ensure service account has required AD rights."
+      when: perm_check is failed
+
+- name: Set validation passed fact
+  ansible.builtin.set_fact:
+    validation_passed: true
+    operation_start_time: "{{ ansible_date_time.epoch }}"

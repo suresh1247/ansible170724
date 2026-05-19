@@ -1,0 +1,67 @@
+---
+- name: GPO | Set GPO naming
+  ansible.builtin.set_fact:
+    gpo_name: >-
+      {{
+        (app_prefix + '-SRV-' + application_name + 'SQL')
+        if server_type == 'SQL'
+        else (app_prefix + '-SRV-' + application_name)
+      }}
+
+- name: GPO | Check if GPO exists
+  ansible.windows.win_shell: |
+    $GPOName = "{{ gpo_name }}"
+    $ExistingGPO = Get-GPO -Name $GPOName -ErrorAction SilentlyContinue
+    
+    if ($ExistingGPO) {
+        Write-Output "EXISTS|$($ExistingGPO.Id)"
+    } else {
+        Write-Output "NOT_FOUND"
+    }
+  register: gpo_check
+
+- name: GPO | Parse GPO check result
+  ansible.builtin.set_fact:
+    gpo_exists: "{{ 'EXISTS' in gpo_check.stdout }}"
+    gpo_id: "{{ gpo_check.stdout.split('|')[1] if 'EXISTS' in gpo_check.stdout else '' }}"
+
+- name: GPO | Create GPO if not exists
+  ansible.windows.win_shell: |
+    New-GPO -Name "{{ gpo_name }}" `
+        -Comment "GPO for {{ application_name }} ({{ server_type }} server)"
+    Write-Output "CREATED:{{ gpo_name }}"
+  register: gpo_creation
+  when: not gpo_exists
+
+- name: GPO | Set GPO created flag
+  ansible.builtin.set_fact:
+    gpo_created: "{{ 'CREATED' in gpo_creation.stdout }}"
+  when: not gpo_exists
+
+- name: GPO | Link GPO to Application OU
+  ansible.windows.win_shell: |
+    $GPOName = "{{ gpo_name }}"
+    $TargetOU = "{{ app_ou_path if app_ou_path else target_ou_dn }}"
+    
+    # Check if already linked
+    $CurrentLinks = Get-GPInheritance -Target $TargetOU -ErrorAction SilentlyContinue
+    $AlreadyLinked = $CurrentLinks.GpoLinks | Where-Object { $_.DisplayName -eq $GPOName }
+    
+    if (-not $AlreadyLinked) {
+        New-GPLink -Name $GPOName -Target $TargetOU -LinkEnabled Yes
+        Write-Output "LINKED|$TargetOU"
+    } else {
+        Write-Output "ALREADY_LINKED|$TargetOU"
+    }
+  register: gpo_link
+
+- name: GPO | Set GPO linked flag
+  ansible.builtin.set_fact:
+    gpo_linked: "{{ 'LINKED' in gpo_link.stdout }}"
+
+- name: GPO | Display GPO status
+  ansible.builtin.debug:
+    msg:
+      - "GPO Name: {{ gpo_name }}"
+      - "GPO Status: {{ 'Created' if gpo_created else 'Already existed' }}"
+      - "GPO Link: {{ 'Linked' if gpo_linked else 'Already linked' }}"

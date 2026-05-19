@@ -1,0 +1,81 @@
+---
+- name: GROUP | Set naming conventions
+  ansible.builtin.set_fact:
+    app_prefix: "{{ application_name[:3] | upper }}"
+    ad_group_name: >-
+      {{
+        (app_prefix + '-PAM-' + application_name + 'SQL')
+        if server_type == 'SQL'
+        else (app_prefix + '-PAM-' + application_name)
+      }}
+
+- name: GROUP | Create PAM Groups OU
+  ansible.windows.win_shell: |
+    $PAM_OU = "OU=PAM-Groups,{{ ou_base_dn }}"
+    $PAM_Exists = Get-ADOrganizationalUnit -Filter "Name -eq 'PAM-Groups'" -ErrorAction SilentlyContinue
+    
+    if (-not $PAM_Exists) {
+        New-ADOrganizationalUnit -Name "PAM-Groups" -Path "{{ ou_base_dn }}" -Description "Container for all PAM security groups"
+        Write-Output "CREATED_PAM_OU"
+    } else {
+        Write-Output "PAM_OU_EXISTS"
+    }
+  register: pam_ou_creation
+
+- name: GROUP | Create AD security group
+  ansible.windows.win_shell: |
+    $GroupName = "{{ ad_group_name }}"
+    $GroupPath = "OU=PAM-Groups,{{ ou_base_dn }}"
+    $ExistingGroup = Get-ADGroup -Filter "Name -eq '$GroupName'" -ErrorAction SilentlyContinue
+    
+    if (-not $ExistingGroup) {
+        New-ADGroup -Name $GroupName `
+            -GroupScope Global `
+            -GroupCategory Security `
+            -Path $GroupPath `
+            -Description "PAM group for {{ application_name }} ({{ server_type }} server)"
+        Write-Output "CREATED:$GroupName"
+        $true
+    } else {
+        Write-Output "EXISTS:$GroupName"
+        $false
+    }
+  register: group_creation
+
+- name: GROUP | Set group created flag
+  ansible.builtin.set_fact:
+    group_created: "{{ 'CREATED' in group_creation.stdout }}"
+
+- name: GROUP | Add opsintel user to PAM group
+  ansible.windows.win_shell: |
+    $GroupName = "{{ ad_group_name }}"
+    $UserName = "{{ opsintel_user }}"
+    
+    # Check if user exists
+    $UserExists = Get-ADUser -Filter "SamAccountName -eq '$UserName'" -ErrorAction SilentlyContinue
+    if (-not $UserExists) {
+        Write-Output "USER_NOT_FOUND:$UserName"
+        exit 0
+    }
+    
+    # Check membership
+    $IsMember = Get-ADGroupMember -Identity $GroupName -ErrorAction SilentlyContinue | Where-Object { $_.SamAccountName -eq $UserName }
+    
+    if ($IsMember) {
+        Write-Output "ALREADY_MEMBER"
+    } else {
+        Add-ADGroupMember -Identity $GroupName -Members $UserName
+        Write-Output "ADDED_SUCCESSFULLY"
+    }
+  register: opsintel_addition
+
+- name: GROUP | Set opsintel added flag
+  ansible.builtin.set_fact:
+    opsintel_added: "{{ 'ADDED_SUCCESSFULLY' in opsintel_addition.stdout }}"
+
+- name: GROUP | Display group status
+  ansible.builtin.debug:
+    msg:
+      - "Group Name: {{ ad_group_name }}"
+      - "Group Status: {{ 'Created' if group_created else 'Already existed' }}"
+      - "opsintel User: {{ 'Added' if opsintel_added else 'Already member or not found' }}"

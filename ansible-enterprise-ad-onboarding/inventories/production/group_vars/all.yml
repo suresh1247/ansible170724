@@ -1,0 +1,36 @@
+---
+# Global variables for all hosts
+
+# Domain configuration
+domain_name: "nat.net"
+ou_base_dn: "DC=Computers,DC=nat,DC=net"
+  #ou_base_dn: "DC=Computers,DC=nat,DC=net"
+
+# Environment
+env: "production"
+
+# Enterprise settings
+enable_audit_logging: true
+enable_notifications: true
+enable_change_tracking: true
+
+# Retry configuration
+ad_retries: 3
+ad_delay: 5
+task_timeout: 300
+
+# Local paths
+audit_path: "/var/log/ansible/ad-audit"
+local_backup_path: "/var/backups/ansible/ad"
+
+# Default service account
+opsintel_user: "opsintel"
+
+# Validation patterns
+server_name_pattern: '^[A-Za-z0-9-]{3,15}$'
+app_name_pattern: '^[A-Za-z][A-Za-z0-9_]{2,30}$'
+
+# Connection settings
+ansible_connection: winrm
+ansible_winrm_server_cert_validation: ignore
+ansible_winrm_transport: credssp

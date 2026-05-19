@@ -1,0 +1,64 @@
+---
+- name: POST | Generate operations summary
+  ansible.builtin.set_fact:
+    operations_summary:
+      operation_id: "{{ operation_id }}"
+      timestamp: "{{ operation_timestamp }}"
+      server: "{{ server_name }}"
+      application: "{{ application_name }}"
+      server_type: "{{ server_type }}"
+      environment: "{{ env }}"
+      actions:
+        ou_created: "{{ app_ou_created | default(false) }}"
+        server_moved: "{{ server_moved | default(false) }}"
+        group_created: "{{ group_created | default(false) }}"
+        opsintel_added: "{{ opsintel_added | default(false) }}"
+        gpo_created: "{{ gpo_created | default(false) }}"
+        gpo_linked: "{{ gpo_linked | default(false) }}"
+      duration_seconds: "{{ (ansible_date_time.epoch | int - operation_start_time | int) }}"
+
+- name: POST | Save operations summary
+  ansible.builtin.copy:
+    content: "{{ operations_summary | to_nice_yaml }}"
+    dest: "{{ audit_path }}/{{ operation_id }}/summary.yml"
+  delegate_to: localhost
+  when: enable_audit_logging
+
+- name: POST | Create change tracking record
+  ansible.builtin.copy:
+    content: |
+      ---
+      change_id: AUTO-{{ operation_id }}
+      requester: {{ ansible_user_id }}
+      change_date: {{ operation_timestamp }}
+      change_type: AD Onboarding
+      items_changed:
+        - "OU: {{ target_ou_dn }}"
+        - "Computer: {{ server_name }}"
+        - "Group: {{ ad_group_name }}"
+        - "GPO: {{ gpo_name }}"
+      status: COMPLETED
+    dest: "{{ local_backup_path }}/changes/{{ operation_id }}_change_record.yml"
+  delegate_to: localhost
+  when: enable_change_tracking
+
+- name: POST | Display final summary
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "OPERATIONS SUMMARY"
+      - "=========================================="
+      - "Operation ID: {{ operation_id }}"
+      - "Duration: {{ operations_summary.duration_seconds }} seconds"
+      - ""
+      - "Actions Performed:"
+      - "  - OU Created: {{ 'Yes' if app_ou_created | default(false) else 'No' }}"
+      - "  - Server Moved: {{ 'Yes' if server_moved | default(false) else 'No' }}"
+      - "  - Security Group: {{ 'Created' if group_created | default(false) else 'Already existed' }}"
+      - "  - opsintel User: {{ 'Added' if opsintel_added | default(false) else 'Already member' }}"
+      - "  - GPO: {{ 'Created' if gpo_created | default(false) else 'Already existed' }}"
+      - "  - GPO Link: {{ 'Created' if gpo_linked | default(false) else 'Already linked' }}"
+      - ""
+      - "Audit Log: {{ audit_path }}/{{ operation_id }}/audit.log"
+      - "Summary: {{ audit_path }}/{{ operation_id }}/summary.yml"
+      - "=========================================="

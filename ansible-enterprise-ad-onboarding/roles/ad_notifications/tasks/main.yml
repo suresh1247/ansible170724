@@ -1,0 +1,17 @@
+---
+- name: NOTIFY | Display success message (console)
+  ansible.builtin.debug:
+    msg:
+      - "✓ AD Onboarding Complete for {{ server_name }}"
+      - "✓ Security Group: {{ ad_group_name }}"
+      - "✓ Target OU: {{ target_ou_dn }}"
+      - "✓ GPO: {{ gpo_name }}"
+
+- name: NOTIFY | Write to local notification log
+  ansible.builtin.copy:
+    content: |
+      {{ operation_timestamp }} - SUCCESS - {{ server_name }} ({{ application_name }}) - Operation {{ operation_id }}
+    dest: "/var/log/ansible/ad-onboarding-success.log"
+    mode: '0644'
+  delegate_to: localhost
+  when: enable_notifications
