@@ -1,0 +1,77 @@
+---
+# Role: ad_group_management
+# Purpose: Create PAM security groups with proper status tracking
+
+- name: GROUP | Set app prefix
+  ansible.builtin.set_fact:
+    app_prefix: "{{ application_name[:3] | upper }}"
+
+- name: GROUP | Set AD group name
+  ansible.builtin.set_fact:
+    ad_group_name: >-
+      {{
+        (app_prefix + '-PAM-' + application_name + 'SQL')
+        if server_type == 'SQL'
+        else (app_prefix + '-PAM-' + application_name)
+      }}
+
+- name: GROUP | Display AD group name
+  ansible.builtin.debug:
+    msg: "Managing AD Group: {{ ad_group_name }}"
+
+- name: GROUP | Create PAM Groups OU
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $BaseDN = "{{ ou_base_dn }}"
+    $PAM_OU = Get-ADOrganizationalUnit -Filter "Name -eq 'PAM-Groups'" -ErrorAction SilentlyContinue
+    if (-not $PAM_OU) {
+        New-ADOrganizationalUnit -Name "PAM-Groups" -Path $BaseDN -Description "Container for all PAM security groups"
+        Write-Output "CREATED"
+    } else {
+        Write-Output "EXISTS"
+    }
+  when: not enable_dry_run
+  register: pam_ou_status
+
+- name: GROUP | Create AD security group
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $GroupName = "{{ ad_group_name }}"
+    $GroupPath = "OU=PAM-Groups,{{ ou_base_dn }}"
+    $ExistingGroup = Get-ADGroup -Filter "Name -eq '$GroupName'" -ErrorAction SilentlyContinue
+    if (-not $ExistingGroup) {
+        New-ADGroup -Name $GroupName -GroupScope Global -GroupCategory Security -Path $GroupPath -Description "PAM group for {{ application_name }} ({{ server_type }} server)"
+        Write-Output "CREATED"
+    } else {
+        Write-Output "EXISTS"
+    }
+  when: not enable_dry_run
+  register: group_status
+
+- name: GROUP | Add opsintel user to group
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $GroupName = "{{ ad_group_name }}"
+    $UserName = "opsintel"
+    
+    $UserExists = Get-ADUser -Filter "SamAccountName -eq '$UserName'" -ErrorAction SilentlyContinue
+    if (-not $UserExists) {
+        Write-Output "USER_NOT_FOUND"
+        exit 0
+    }
+    
+    $IsMember = Get-ADGroupMember -Identity $GroupName -ErrorAction SilentlyContinue | Where-Object { $_.SamAccountName -eq $UserName }
+    if ($IsMember) {
+        Write-Output "ALREADY_MEMBER"
+    } else {
+        Add-ADGroupMember -Identity $GroupName -Members $UserName
+        Write-Output "ADDED"
+    }
+  when: not enable_dry_run
+  register: opsintel_status
+
+- name: GROUP | Set facts for group status
+  ansible.builtin.set_fact:
+    pam_ou_result: "{{ pam_ou_status.stdout | default('EXISTS') }}"
+    group_result: "{{ group_status.stdout | default('EXISTS') }}"
+    opsintel_result: "{{ opsintel_status.stdout | default('N/A') }}"
