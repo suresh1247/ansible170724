@@ -172,14 +172,18 @@
   tasks:
     - name: MAIN | Execute AD onboarding (Only if server exists)
       block:
+        - name: Include validation role
+          ansible.builtin.include_role:
+            name: ad_validation
+            apply:
+              roles_path: "{{ ansible_roles_path }}"
+          when: server_exists and not enable_dry_run
+
         - name: Include OU management role
           ansible.builtin.include_role:
             name: ad_ou_management
-          when: server_exists and not enable_dry_run
-
-        - name: Include computer management role
-          ansible.builtin.include_role:
-            name: ad_computer_management
+            apply:
+              roles_path: "{{ ansible_roles_path }}"
           when: server_exists and not enable_dry_run
 
         - name: Include group management role
