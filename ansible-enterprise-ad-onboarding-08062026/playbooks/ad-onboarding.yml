@@ -5,19 +5,24 @@
   gather_subset:
     - min
   
-  vars_files:
-    - ../vault.yml
+  # COMMENT OUT OR REMOVE THIS LINE:
+  # vars_files:
+  #   - ../vault.yml
   
   vars:
-    # Operation tracking
+    # Use direct variables from AAP extra_vars or inventory
+    ad_credentials:
+      domain_admin_user: "{{ ad_username | default('adminuser') }}"
+      vault_ad_password: "{{ ad_password | default('') }}"
+    
+    # Rest of your variables remain the same...
+    enable_dry_run: "{{ enable_dry_run | default(false) }}"
     operation_id: "{{ lookup('password', '/dev/null length=12 chars=hex') | upper }}"
     operation_start_time: "{{ ansible_date_time.epoch }}"
     
-    # Enterprise settings
-    enable_dry_run: false
+
     ad_retries: 3
-    ad_delay: 5
-    
+    ad_delay: 5    
     # Validation patterns
     server_name_pattern: '^[A-Za-z][A-Za-z0-9-]{2,14}$'
     app_name_pattern: '^[A-Za-z][A-Za-z0-9_]{2,30}$'
@@ -28,7 +33,6 @@
     
     # Default values for reporting
     ou_creation: { stdout: "EXISTS" }
-    pam_ou_creation: { stdout: "EXISTS" }
     group_creation: { stdout: "EXISTS" }
     opsintel_add: { stdout: "ALREADY_MEMBER" }
     gpo_creation: { stdout: "EXISTS" }
@@ -38,16 +42,15 @@
     server_move: { stdout: "NOT_MOVED" }
     verify_restricted_group: { stdout: "VERIFIED" }
     
-#    ad_credentials:
-#      domain_admin_user: "{{ ad_username | default('adminuser') }}"
-#      vault_ad_password: "{{ ad_password | mandatory }}"    
-    # Credentials from vault
-    ansible_user: "{{ ad_credentials.domain_admin_user }}"
-    ansible_password: "{{ ad_credentials.vault_ad_password }}"
+    # Credentials from extra_vars or inventory
+    ansible_user: "{{ ad_username }}"
+    ansible_password: "{{ ad_password }}"
     ansible_connection: winrm
     ansible_winrm_transport: ntlm
     ansible_winrm_server_cert_validation: ignore
     ansible_port: 5985
+    ansible_winrm_operation_timeout_sec: 60
+    ansible_winrm_read_timeout_sec: 120
 
   pre_tasks:
     - name: VALIDATION | Validate required parameters
