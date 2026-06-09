@@ -5,10 +5,6 @@
   gather_subset:
     - min
   
-  # COMMENT OUT OR REMOVE THIS LINE:
-  # vars_files:
-  #   - ../vault.yml
-  
   vars:
     # Use direct variables from AAP extra_vars or inventory
     ad_credentials:
