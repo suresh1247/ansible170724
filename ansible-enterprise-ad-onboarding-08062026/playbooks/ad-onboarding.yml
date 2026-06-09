@@ -38,9 +38,12 @@
     server_move: { stdout: "NOT_MOVED" }
     verify_restricted_group: { stdout: "VERIFIED" }
     
+    ad_credentials:
+      domain_admin_user: "{{ ad_username | default('adminuser') }}"
+      vault_ad_password: "{{ ad_password | mandatory }}"    
     # Credentials from vault
-    ansible_user: "{{ ad_credentials.domain_admin_user }}"
-    ansible_password: "{{ ad_credentials.vault_ad_password }}"
+#    ansible_user: "{{ ad_credentials.domain_admin_user }}"
+#    ansible_password: "{{ ad_credentials.vault_ad_password }}"
     ansible_connection: winrm
     ansible_winrm_transport: ntlm
     ansible_winrm_server_cert_validation: ignore
