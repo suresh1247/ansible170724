@@ -5,9 +5,9 @@
   gather_subset:
     - min
   
-  vars_files:
-    - ../vault.yml
-  
+#  vars_files:
+#    - ../vault.yml
+#  
   vars:
     # Operation tracking
     operation_id: "{{ lookup('password', '/dev/null length=12 chars=hex') | upper }}"
