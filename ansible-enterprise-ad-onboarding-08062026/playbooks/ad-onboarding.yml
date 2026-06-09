@@ -10,7 +10,7 @@
     ad_credentials:
       domain_admin_user: "{{ ad_username | default('adminuser') }}"
       vault_ad_password: "{{ ad_password | default('') }}"
-    
+    ansible_roles_path: "/runner/project/ansible-enterprise-ad-onboarding-08062026/roles"    
     # Rest of your variables remain the same...
     enable_dry_run: "{{ enable_dry_run | default(false) }}"
     operation_id: "{{ lookup('password', '/dev/null length=12 chars=hex') | upper }}"
