@@ -4,7 +4,7 @@
 
 - name: REPORT | Calculate operation duration
   ansible.builtin.set_fact:
-    operation_duration: "{{ (ansible_date_time.epoch | int - operation_start_time | int) }}"
+    operation_duration: "{{ (ansible_date_time.epoch | int - operation_start_time | int) if operation_start_time is defined else 0 }}"
 
 - name: REPORT | Final Status Report
   ansible.builtin.debug:
@@ -12,14 +12,14 @@
       - "=========================================="
       - "✅ ACTIVE DIRECTORY ONBOARDING COMPLETED"
       - "=========================================="
-      - "Operation ID: {{ operation_id }}"
-      - "Duration: {{ operation_duration }} seconds"
+      - "Operation ID: {{ operation_id | default('N/A') }}"
+      - "Duration: {{ operation_duration | default(0) }} seconds"
       - "Dry Run: {{ 'YES' if enable_dry_run else 'NO' }}"
       - ""
       - "Server Details:"
-      - "  Server Name: {{ server_name }}"
-      - "  Domain: {{ domain_name }}"
-      - "  Application: {{ application_name }}"
+      - "  Server Name: {{ server_name | default('N/A') }}"
+      - "  Domain: {{ domain_name | default('N/A') }}"
+      - "  Application: {{ application_name | default('N/A') }}"
       - "  Server Type: {{ server_type | default('NON-SQL') }}"
       - "  Target OU: {{ target_ou_dn | default('N/A') }}"
       - ""
