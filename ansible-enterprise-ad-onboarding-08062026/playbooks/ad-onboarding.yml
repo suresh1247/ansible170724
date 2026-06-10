@@ -11,6 +11,10 @@
     ad_retries: 3
     ad_delay: 5
     
+    # Operation tracking
+    operation_id: "{{ lookup('password', '/dev/null length=12 chars=hex') | upper }}"
+    operation_start_time: "{{ ansible_date_time.epoch }}"
+    
     # Validation patterns
     server_name_pattern: '^[A-Za-z][A-Za-z0-9-]{2,14}$'
     app_name_pattern: '^[A-Za-z][A-Za-z0-9_]{2,30}$'
@@ -71,11 +75,6 @@
         that:
           - requester_confirmation | upper in ['YES', 'NO']
         fail_msg: "Requester confirmation must be YES or NO"
-
-    - name: VALIDATION | Set dry run mode
-      ansible.builtin.set_fact:
-        dry_run_enabled: "{{ enable_dry_run | bool }}"
-      when: enable_dry_run is defined
 
     - name: VALIDATION | Check for dry run mode
       ansible.builtin.debug:
@@ -216,7 +215,7 @@
           - "=========================================="
           - "❌ AD ONBOARDING CANCELLED"
           - "=========================================="
-          - "Operation ID: {{ operation_id | default('N/A') }}"
+          - "Operation ID: {{ operation_id }}"
           - "Server: {{ server_name }}"
           - "Status: FAILED - Server Not Found in Active Directory"
           - ""
