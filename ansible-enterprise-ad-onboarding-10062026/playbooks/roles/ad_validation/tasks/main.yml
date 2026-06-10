@@ -1,0 +1,86 @@
+---
+# Role: ad_validation
+# Purpose: Validate all input parameters and prerequisites
+
+- name: VALIDATION | Validate required parameters
+  ansible.builtin.assert:
+    that:
+      - server_name is defined and server_name | length > 0
+      - application_name is defined and application_name | length > 0
+      - domain_name is defined and domain_name | length > 0
+      - requester_confirmation is defined
+    fail_msg: "Missing required parameters: server_name, application_name, domain_name, requester_confirmation"
+    success_msg: "✓ Required parameters validation passed"
+
+- name: VALIDATION | Validate server name format
+  ansible.builtin.assert:
+    that:
+      - server_name is match(server_name_pattern)
+      - server_name | length >= 3
+      - server_name | length <= 15
+    fail_msg: "Invalid server name '{{ server_name }}'. Must start with letter, 3-15 chars, alphanumeric and hyphens only"
+    success_msg: "✓ Server name validation passed"
+
+- name: VALIDATION | Validate application name format
+  ansible.builtin.assert:
+    that:
+      - application_name is match(app_name_pattern)
+      - application_name | length >= 3
+      - application_name | length <= 30
+    fail_msg: "Invalid application name '{{ application_name }}'. Must start with letter, 3-30 chars, alphanumeric and underscores only"
+    success_msg: "✓ Application name validation passed"
+
+- name: VALIDATION | Validate domain name format
+  ansible.builtin.assert:
+    that:
+      - domain_name is match(domain_name_pattern)
+    fail_msg: "Invalid domain name format: {{ domain_name }}"
+    success_msg: "✓ Domain name validation passed"
+
+- name: VALIDATION | Validate confirmation flag
+  ansible.builtin.assert:
+    that:
+      - requester_confirmation | upper in ['YES', 'NO']
+    fail_msg: "Requester confirmation must be YES or NO (got: {{ requester_confirmation }})"
+    success_msg: "✓ Confirmation flag validation passed"
+
+- name: VALIDATION | Check for dry run mode
+  ansible.builtin.debug:
+    msg: "⚠️ DRY RUN MODE ENABLED - No changes will be made to Active Directory"
+  when: enable_dry_run | bool
+
+- name: CONNECTION | Test connectivity to domain controller
+  ansible.windows.win_ping:
+  register: ping_test
+  until: ping_test is success
+  retries: "{{ ad_retries }}"
+  delay: "{{ ad_delay }}"
+
+- name: CONNECTION | Display connection info
+  ansible.builtin.debug:
+    msg:
+      - "Connected to: {{ ansible_hostname }}"
+      - "IP Address: {{ ansible_default_ipv4.address | default('N/A') }}"
+      - "OS: {{ ansible_os_name }}"
+      - "Domain: {{ ansible_domain | default('N/A') }}"
+
+- name: CONNECTION | Verify Active Directory module
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $DomainInfo = Get-ADDomain
+    Write-Output "SUCCESS|Domain:$($DomainInfo.DNSRoot)|Controllers:$($DomainInfo.ReplicaDirectoryServers.Count)"
+  register: ad_verify
+  until: ad_verify is success
+  retries: "{{ ad_retries }}"
+  delay: "{{ ad_delay }}"
+
+- name: CONNECTION | Parse AD information
+  ansible.builtin.set_fact:
+    domain_fqdn: "{{ ad_verify.stdout.split('|')[1].split(':')[1] }}"
+    dc_count: "{{ ad_verify.stdout.split('|')[2].split(':')[1] }}"
+
+- name: CONNECTION | Display AD information
+  ansible.builtin.debug:
+    msg:
+      - "AD Domain: {{ domain_fqdn }}"
+      - "Domain Controllers: {{ dc_count }}"
