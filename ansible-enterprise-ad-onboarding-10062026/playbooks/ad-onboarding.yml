@@ -5,6 +5,10 @@
   gather_subset:
     - min
   
+  # Add vault file - using relative path from playbook
+  vars_files:
+    - ../vault.yml
+  
   vars:
     # Set default values for variables (no recursion)
     enable_dry_run: false
@@ -23,6 +27,10 @@
     # Base OU path
     ou_base_dn: "DC={{ domain_name.replace('.', ',DC=') }}"
     
+    # Extract credentials from vault
+    ad_username: "{{ ad_credentials.domain_admin_user }}"
+    ad_password: "{{ ad_credentials.vault_ad_password }}"
+    
     # Default values for reporting
     ou_creation: { stdout: "EXISTS" }
     group_creation: { stdout: "EXISTS" }
@@ -34,7 +42,9 @@
     server_move: { stdout: "NOT_MOVED" }
     verify_restricted_group: { stdout: "VERIFIED" }
     
-    # Use ansible_user from AAP credential
+    # Connection settings using vault credentials
+    ansible_user: "{{ ad_credentials.domain_admin_user }}"
+    ansible_password: "{{ ad_credentials.vault_ad_password }}"
     ansible_connection: winrm
     ansible_winrm_transport: ntlm
     ansible_winrm_server_cert_validation: ignore
@@ -42,6 +52,7 @@
     ansible_winrm_operation_timeout_sec: 60
     ansible_winrm_read_timeout_sec: 120
 
+  # Rest of your playbook continues unchanged...
   pre_tasks:
     - name: VALIDATION | Validate required parameters
       ansible.builtin.assert:
@@ -75,6 +86,13 @@
         that:
           - requester_confirmation | upper in ['YES', 'NO']
         fail_msg: "Requester confirmation must be YES or NO"
+
+    - name: VALIDATION | Debug vault status
+      ansible.builtin.debug:
+        msg:
+          - "Vault file loaded successfully"
+          - "Username from vault: {{ ad_credentials.domain_admin_user }}"
+          - "Domain from vault: {{ ansible_service_account.domain | default('N/A') }}"
 
     - name: VALIDATION | Check for dry run mode
       ansible.builtin.debug:
