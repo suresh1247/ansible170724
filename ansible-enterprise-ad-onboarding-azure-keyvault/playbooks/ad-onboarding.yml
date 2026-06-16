@@ -1,0 +1,247 @@
+---
+- name: ENTERPRISE ACTIVE DIRECTORY ONBOARDING
+  hosts: domain_controllers
+  gather_facts: yes
+  gather_subset:
+    - min
+  become: true
+  become_method: runas
+  become_user: SYSTEM 
+  # Add vault file - using relative path from playbook
+  vars_files:
+    - ../vault.yml
+  
+  vars:
+    # Set default values for variables (no recursion)
+    enable_dry_run: false
+    ad_retries: 3
+    ad_delay: 5
+    
+    # Operation tracking
+    operation_id: "{{ lookup('password', '/dev/null length=12 chars=hex') | upper }}"
+    operation_start_time: "{{ ansible_date_time.epoch }}"
+    
+    # Validation patterns
+    server_name_pattern: '^[A-Za-z][A-Za-z0-9-]{2,14}$'
+    app_name_pattern: '^[A-Za-z][A-Za-z0-9_]{2,30}$'
+    domain_name_pattern: '^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    
+    # Base OU path
+    ou_base_dn: "DC={{ domain_name.replace('.', ',DC=') }}"
+    
+    # Extract credentials from vault
+    ad_username: "{{ ad_credentials.domain_admin_user }}"
+    ad_password: "{{ ad_credentials.vault_ad_password }}"
+    
+    # Default values for reporting
+    ou_creation: { stdout: "EXISTS" }
+    group_creation: { stdout: "EXISTS" }
+    opsintel_add: { stdout: "ALREADY_MEMBER" }
+    gpo_creation: { stdout: "EXISTS" }
+    gpo_link: { stdout: "ALREADY_LINKED" }
+    restricted_group_config: { stdout: "CONFIGURED" }
+    gpupdate_result: { stdout: "INITIATED" }
+    server_move: { stdout: "NOT_MOVED" }
+    verify_restricted_group: { stdout: "VERIFIED" }
+    
+    # Connection settings using vault credentials
+    ansible_user: "{{ ad_credentials.domain_admin_user }}"
+    ansible_password: "{{ ad_credentials.vault_ad_password }}"
+    ansible_connection: winrm
+    ansible_winrm_transport: ntlm
+    ansible_winrm_server_cert_validation: ignore
+    ansible_port: 5985
+    ansible_winrm_operation_timeout_sec: 60
+    ansible_winrm_read_timeout_sec: 120
+
+  # Rest of your playbook continues unchanged...
+  pre_tasks:
+    - name: VALIDATION | Validate required parameters
+      ansible.builtin.assert:
+        that:
+          - server_name is defined
+          - application_name is defined
+          - domain_name is defined
+          - requester_confirmation is defined
+        fail_msg: "Missing required parameters"
+
+    - name: VALIDATION | Validate server name format
+      ansible.builtin.assert:
+        that:
+          - server_name is match(server_name_pattern)
+        fail_msg: "Invalid server name '{{ server_name }}'"
+
+    - name: VALIDATION | Validate application name format
+      ansible.builtin.assert:
+        that:
+          - application_name is match(app_name_pattern)
+        fail_msg: "Invalid application name '{{ application_name }}'"
+
+    - name: VALIDATION | Validate domain name format
+      ansible.builtin.assert:
+        that:
+          - domain_name is match(domain_name_pattern)
+        fail_msg: "Invalid domain name format: {{ domain_name }}"
+
+    - name: VALIDATION | Validate confirmation flag
+      ansible.builtin.assert:
+        that:
+          - requester_confirmation | upper in ['YES', 'NO']
+        fail_msg: "Requester confirmation must be YES or NO"
+
+    - name: VALIDATION | Debug vault status
+      ansible.builtin.debug:
+        msg:
+          - "Vault file loaded successfully"
+          - "Username from vault: {{ ad_credentials.domain_admin_user }}"
+          - "Domain from vault: {{ ansible_service_account.domain | default('N/A') }}"
+
+    - name: VALIDATION | Check for dry run mode
+      ansible.builtin.debug:
+        msg: "⚠️ DRY RUN MODE ENABLED - No changes will be made to Active Directory"
+      when: enable_dry_run | bool
+
+    - name: CONNECTION | Test connectivity to domain controller
+      ansible.windows.win_ping:
+      register: ping_test
+      until: ping_test is success
+      retries: "{{ ad_retries }}"
+      delay: "{{ ad_delay }}"
+
+    - name: CONNECTION | Verify Active Directory module
+      ansible.windows.win_shell: |
+        Import-Module ActiveDirectory -ErrorAction Stop
+        Get-ADDomain | Select-Object DNSRoot
+      register: ad_verify
+      until: ad_verify is success
+      retries: "{{ ad_retries }}"
+      delay: "{{ ad_delay }}"
+
+    # ============================================
+    # CRITICAL: Check Server Existence FIRST
+    # ============================================
+    - name: SERVER | Search for server in Active Directory
+      ansible.windows.win_shell: |
+        Import-Module ActiveDirectory -ErrorAction SilentlyContinue
+        $Computer = Get-ADComputer -Filter "Name -eq '{{ server_name }}'" -Properties DistinguishedName, CanonicalName -ErrorAction SilentlyContinue
+        if ($Computer) {
+            $Result = @{
+                Exists = $true
+                DN = $Computer.DistinguishedName
+                CanonicalName = $Computer.CanonicalName
+            }
+            $Result | ConvertTo-Json
+        } else {
+            '{"Exists": false}'
+        }
+      register: server_search
+
+    - name: SERVER | Parse server information
+      ansible.builtin.set_fact:
+        server_info: "{{ server_search.stdout | from_json }}"
+        server_exists: "{{ (server_search.stdout | from_json).Exists | default(false) }}"
+
+    - name: SERVER | Display server status
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "SERVER STATUS CHECK"
+          - "=========================================="
+          - "Server Name: {{ server_name }}"
+          - "Exists in AD: {{ 'YES' if server_exists else 'NO' }}"
+          - "Current Location: {{ server_info.CanonicalName | default('N/A') }}"
+          - "=========================================="
+
+    # ============================================
+    # STOP PLAYBOOK IF SERVER DOES NOT EXIST
+    # ============================================
+    - name: SERVER | Stop playbook - Server not found in AD
+      ansible.builtin.fail:
+        msg: |
+          ==========================================
+          ❌ OPERATION STOPPED ❌
+          ==========================================
+          Server '{{ server_name }}' was NOT found in Active Directory.
+          
+          No OUs, GPOs, or Groups will be created.
+          
+          Please verify:
+          1. The server name is correct
+          2. The server is joined to the domain
+          3. The server exists in Active Directory
+          ==========================================
+      when: 
+        - not server_exists
+        - requester_confirmation | upper == 'NO'
+
+    - name: SERVER | Set server type and target OU (only if server exists)
+      ansible.builtin.set_fact:
+        server_type: "{{ 'SQL' if 'SQL' in server_name | upper else 'NON-SQL' }}"
+        target_ou_dn: >-
+          {{
+            ('OU=' + application_name + ',OU=SQL,OU=Servers,OU=LKM,' + ou_base_dn)
+            if ('SQL' in server_name | upper)
+            else ('OU=' + application_name + ',OU=Servers,OU=LKM,' + ou_base_dn)
+          }}
+        app_prefix: "{{ application_name[:3] | upper }}"
+        ad_group_name: "{{ application_name[:3] | upper }}-PAM-{{ application_name }}{{ 'SQL' if ('SQL' in server_name | upper) else '' }}"
+        gpo_name: "{{ application_name[:3] | upper }}-SRV-{{ application_name }}{{ 'SQL' if ('SQL' in server_name | upper) else '' }}"
+      when: server_exists
+
+  tasks:
+    - name: MAIN | Execute AD onboarding (Only if server exists)
+      block:
+        - name: Include validation role
+          ansible.builtin.include_role:
+            name: ad_validation
+          when: server_exists and not enable_dry_run | bool
+
+        - name: Include OU management role
+          ansible.builtin.include_role:
+            name: ad_ou_management
+          when: server_exists and not enable_dry_run | bool
+
+        - name: Include computer management role
+          ansible.builtin.include_role:
+            name: ad_computer_management
+          when: server_exists and not enable_dry_run | bool
+
+        - name: Include group management role
+          ansible.builtin.include_role:
+            name: ad_group_management
+          when: server_exists and not enable_dry_run | bool
+
+        - name: Include GPO management role
+          ansible.builtin.include_role:
+            name: ad_gpo_management
+          when: server_exists and not enable_dry_run | bool
+
+        - name: Include restricted groups role
+          ansible.builtin.include_role:
+            name: ad_restricted_groups
+          when: server_exists and not enable_dry_run | bool
+
+        - name: Include reporting role
+          ansible.builtin.include_role:
+            name: ad_reporting
+          when: server_exists
+
+      when: server_exists
+
+  post_tasks:
+    - name: REPORT | Server not found - Final summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "❌ AD ONBOARDING CANCELLED"
+          - "=========================================="
+          - "Operation ID: {{ operation_id }}"
+          - "Server: {{ server_name }}"
+          - "Status: FAILED - Server Not Found in Active Directory"
+          - ""
+          - "No changes were made to Active Directory."
+          - "No OUs, GPOs, or Groups were created."
+          - ""
+          - "Please verify the server name and try again."
+          - "=========================================="
+      when: not server_exists

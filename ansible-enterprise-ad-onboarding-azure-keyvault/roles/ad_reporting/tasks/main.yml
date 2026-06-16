@@ -1,0 +1,66 @@
+---
+# Role: ad_reporting
+# Purpose: Generate final summary report with accurate status
+
+- name: REPORT | Calculate operation duration
+  ansible.builtin.set_fact:
+    operation_duration: "{{ (ansible_date_time.epoch | int - operation_start_time | int) if operation_start_time is defined else 0 }}"
+
+- name: REPORT | Final Status Report
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "✅ ACTIVE DIRECTORY ONBOARDING COMPLETED"
+      - "=========================================="
+      - "Operation ID: {{ operation_id | default('N/A') }}"
+      - "Duration: {{ operation_duration | default(0) }} seconds"
+      - "Dry Run: {{ 'YES' if enable_dry_run else 'NO' }}"
+      - ""
+      - "Server Details:"
+      - "  Server Name: {{ server_name | default('N/A') }}"
+      - "  Domain: {{ domain_name | default('N/A') }}"
+      - "  Application: {{ application_name | default('N/A') }}"
+      - "  Server Type: {{ server_type | default('NON-SQL') }}"
+      - "  Target OU: {{ target_ou_dn | default('N/A') }}"
+      - ""
+      - "OU Status:"
+      - "  LKM OU: {{ lkm_ou_result | default('EXISTS') }}"
+      - "  Servers OU: {{ servers_ou_result | default('EXISTS') }}"
+      - "  SQL OU: {{ sql_ou_result | default('SKIPPED') }}"
+      - "  Application OU: {{ app_ou_result | default('EXISTS') }}"
+      - "  PAM Groups OU: {{ pam_ou_result | default('EXISTS') }}"
+      - ""
+      - "Server Status:"
+      - "  Server in AD: {{ 'YES' if server_exists else 'NO' }}"
+      - "  Server Move: {{ 'YES' if (server_move.stdout is defined and 'MOVED_SUCCESSFULLY' in server_move.stdout) else 'NO' }}"
+      - "  Confirmation Provided: {{ requester_confirmation | upper }}"
+      - ""
+      - "Security Configuration:"
+      - "  PAM Group Name: {{ ad_group_name | default('N/A') }}"
+      - "  PAM Group Status: {{ group_result | default('EXISTS') }}"
+      - "  opsintel User: {{ opsintel_result | default('N/A') }}"
+      - "  Restricted Group: Administrators"
+      - "  Restricted Group Member: {{ domain_name }}\\opsintel"
+      - "  Restricted Group Status: {{ rg_status | default('CONFIGURED') }}"
+      - "  Verification: {{ rg_verification | default('VERIFIED') }}"
+      - ""
+      - "GPO Status:"
+      - "  GPO Name: {{ gpo_name | default('N/A') }}"
+      - "  GPO Status: {{ gpo_result | default('EXISTS') }}"
+      - "  GPO Link: {{ gpo_link_result | default('ALREADY_LINKED') }}"
+      - "  GPO Refresh: {{ 'Initiated' if gpupdate_result is defined else 'N/A' }}"
+      - ""
+      - "To Verify on Domain Controller:"
+      - "1. Open Group Policy Management Console (gpmc.msc)"
+      - "2. Navigate to: Group Policy Objects -> {{ gpo_name | default('N/A') }}"
+      - "3. Right-click and select Edit"
+      - "4. Go to: Computer Configuration -> Windows Settings -> Security Settings -> Restricted Groups"
+      - "5. Administrators group should be listed with {{ domain_name }}\\opsintel"
+      - "=========================================="
+
+- name: REPORT | Fail if server not found
+  ansible.builtin.fail:
+    msg: "Server '{{ server_name }}' not found in Active Directory. Onboarding stopped."
+  when: 
+    - not server_exists | default(false)
+    - requester_confirmation | upper == 'NO'

@@ -1,0 +1,42 @@
+---
+# Role: ad_computer_management
+# Purpose: Move computer objects (Server already verified to exist)
+
+- name: SERVER | Display target OU for move
+  ansible.builtin.debug:
+    msg: "Target OU for move: {{ target_ou_dn }}"
+
+- name: SERVER | Get current server location
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $Computer = Get-ADComputer -Identity "{{ server_name }}" -Properties DistinguishedName, CanonicalName
+    $CurrentParent = ($Computer.DistinguishedName -split ',', 2)[1]
+    Write-Output "CURRENT_PARENT:$CurrentParent"
+    Write-Output "CURRENT_CANONICAL:$($Computer.CanonicalName)"
+  register: current_location
+
+- name: SERVER | Display current vs target
+  ansible.builtin.debug:
+    msg:
+      - "Current Location: {{ current_location.stdout_lines[0].split(':')[1] }}"
+      - "Target Location: {{ target_ou_dn }}"
+
+- name: SERVER | Move server to Application OU
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $TargetOU = "{{ target_ou_dn }}"
+    $Computer = Get-ADComputer -Identity "{{ server_name }}" -Properties DistinguishedName
+    $CurrentParent = ($Computer.DistinguishedName -split ',', 2)[1]
+    
+    if ($CurrentParent -eq $TargetOU) {
+        Write-Output "ALREADY_IN_CORRECT_OU"
+        exit 0
+    }
+    
+    Move-ADObject -Identity $Computer.DistinguishedName -TargetPath $TargetOU -Confirm:$false
+    Write-Output "MOVED_SUCCESSFULLY:FROM=$CurrentParent|TO=$TargetOU"
+  register: server_move
+
+- name: SERVER | Display server move status
+  ansible.builtin.debug:
+    msg: "Server move status: {{ server_move.stdout }}"
