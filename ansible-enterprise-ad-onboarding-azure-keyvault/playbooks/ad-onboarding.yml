@@ -5,7 +5,6 @@
   gather_subset:
     - min
   
-  # Use dedicated service account from vault
   vars_files:
     - ../vault.yml
   
@@ -27,11 +26,13 @@
     # Base OU path
     ou_base_dn: "DC={{ domain_name.replace('.', ',DC=') }}"
     
-    # Credentials from vault (Service Account)
+    # Extract credentials from vault
     ad_username: "{{ ad_credentials.domain_admin_user }}"
     ad_password: "{{ ad_credentials.vault_ad_password }}"
     
-    # Connection settings from AAP Machine Credential
+    # Connection settings - credentials from vault
+    ansible_user: "{{ ad_credentials.domain_admin_user }}"
+    ansible_password: "{{ ad_credentials.vault_ad_password }}"
     ansible_connection: winrm
     ansible_winrm_transport: ntlm
     ansible_winrm_server_cert_validation: ignore
@@ -40,6 +41,17 @@
     ansible_winrm_read_timeout_sec: 120
 
   pre_tasks:
+    # ============================================
+    # DEBUG: Verify credentials are loaded
+    # ============================================
+    - name: DEBUG | Verify vault credentials loaded
+      ansible.builtin.debug:
+        msg:
+          - "Vault credentials loaded successfully"
+          - "Username: {{ ad_credentials.domain_admin_user }}"
+          - "Domain: {{ ansible_service_account.domain | default('N/A') }}"
+      no_log: false
+
     # ============================================
     # SAFETY: Require explicit approval
     # ============================================
@@ -373,7 +385,7 @@
           changed_when: gpo_link_result.stdout == "LINKED"
 
         # ============================================
-        # RESTRICTED GROUPS (With backup and safe method)
+        # RESTRICTED GROUPS
         # ============================================
         - name: RESTRICTED | Backup GPO before modification
           ansible.windows.win_shell: |
@@ -414,7 +426,6 @@
             if ($Content -match "${GroupName}__Members") {
                 Write-Output "ALREADY_CONFIGURED"
             } else {
-                # Add Restricted Group entry using PAM group
                 $GroupEntry = "${GroupName}__Members = $DomainName\opsintel"
                 $GroupEntry2 = "${GroupName}__MemberOf = "
                 
@@ -426,7 +437,6 @@
                 
                 $Content | Set-Content -Path $GptTmplPath -Force -Encoding ASCII
                 
-                # Update GPO version
                 $GptIniPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\GPT.INI"
                 if (Test-Path $GptIniPath) {
                     $GptIni = Get-Content $GptIniPath -Raw
@@ -469,7 +479,7 @@
           changed_when: false
 
         # ============================================
-        # GPO REFRESH (Run on target server, not DC)
+        # GPO REFRESH
         # ============================================
         - name: GPO | Trigger policy refresh on target server
           ansible.windows.win_shell: |
