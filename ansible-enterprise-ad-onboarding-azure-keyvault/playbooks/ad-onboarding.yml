@@ -5,7 +5,6 @@
   gather_subset:
     - min
   
-  # Use dedicated service account from vault
   vars_files:
     - ../vault.yml
   
@@ -109,27 +108,20 @@
     # SERVER: Check existence (Must fail if not found)
     # ============================================
     - name: SERVER | Search for server in Active Directory
-      ansible.windows.win_shell: |
-        Import-Module ActiveDirectory -ErrorAction SilentlyContinue
-        $Computer = Get-ADComputer -Filter "Name -eq '{{ server_name }}'" -Properties DistinguishedName, CanonicalName -ErrorAction SilentlyContinue
-        if ($Computer) {
-            $Result = @{
-                Exists = $true
-                DN = $Computer.DistinguishedName
-                CanonicalName = $Computer.CanonicalName
-            }
-            $Result | ConvertTo-Json
-        } else {
-            '{"Exists": false}'
-        }
-      register: server_search
+      microsoft.ad.computer_info:
+        identity: "{{ server_name }}"
+        properties:
+          - DistinguishedName
+          - CanonicalName
+      register: server_info_result
+      failed_when: false
       no_log: true
 
     - name: SERVER | Parse server information
       ansible.builtin.set_fact:
-        server_info: "{{ server_search.stdout | from_json }}"
-        server_exists: "{{ (server_search.stdout | from_json).Exists | default(false) }}"
-      no_log: true
+        server_exists: "{{ server_info_result.objects | length > 0 }}"
+        server_dn: "{{ server_info_result.objects[0].DistinguishedName if server_info_result.objects | length > 0 else '' }}"
+        server_canonical: "{{ server_info_result.objects[0].CanonicalName if server_info_result.objects | length > 0 else '' }}"
 
     - name: SERVER | Display server status
       ansible.builtin.debug:
@@ -139,7 +131,7 @@
           - "=========================================="
           - "Server Name: {{ server_name }}"
           - "Exists in AD: {{ 'YES' if server_exists else 'NO' }}"
-          - "Current Location: {{ server_info.CanonicalName | default('N/A') }}"
+          - "Current Location: {{ server_canonical | default('N/A') }}"
           - "=========================================="
 
     # ============================================
@@ -182,7 +174,7 @@
     - name: MAIN | Execute AD onboarding
       block:
         # ============================================
-        # OU MANAGEMENT (Using microsoft.ad modules)
+        # OU MANAGEMENT (Using microsoft.ad.ou)
         # ============================================
         - name: OU | Ensure LKM OU exists
           microsoft.ad.ou:
@@ -190,7 +182,9 @@
             path: "{{ ou_base_dn }}"
             description: "LKM Root OU for server management"
             state: present
+            scope: one_level
           run_once: true
+          register: lkm_ou_result
           when: not enable_dry_run | bool
 
         - name: OU | Ensure Servers OU exists
@@ -199,7 +193,9 @@
             path: "OU=LKM,{{ ou_base_dn }}"
             description: "Container for all server OUs"
             state: present
+            scope: one_level
           run_once: true
+          register: servers_ou_result
           when: not enable_dry_run | bool
 
         - name: OU | Ensure SQL OU exists if needed
@@ -208,7 +204,9 @@
             path: "OU=Servers,OU=LKM,{{ ou_base_dn }}"
             description: "Container for SQL server OUs"
             state: present
+            scope: one_level
           run_once: true
+          register: sql_ou_result
           when: server_type == "SQL" and not enable_dry_run | bool
 
         - name: OU | Ensure Application OU exists
@@ -217,24 +215,25 @@
             path: "{{ 'OU=SQL,OU=Servers,OU=LKM' if server_type == 'SQL' else 'OU=Servers,OU=LKM' }},{{ ou_base_dn }}"
             description: "OU for {{ application_name }} application servers"
             state: present
+            scope: one_level
           run_once: true
           register: app_ou_result
           when: not enable_dry_run | bool
 
         # ============================================
-        # COMPUTER MANAGEMENT (Using microsoft.ad modules)
+        # COMPUTER MANAGEMENT (Using microsoft.ad.computer)
         # ============================================
         - name: COMPUTER | Move server to target OU
           microsoft.ad.computer:
-            name: "{{ server_name }}"
-            state: present
+            identity: "{{ server_name }}"
             organizational_unit: "{{ target_ou_dn }}"
+            state: present
           run_once: true
           register: server_move
           when: server_exists and not enable_dry_run | bool
 
         # ============================================
-        # GROUP MANAGEMENT (Using microsoft.ad modules)
+        # GROUP MANAGEMENT (Using microsoft.ad.group)
         # ============================================
         - name: GROUP | Ensure PAM Groups OU exists
           microsoft.ad.ou:
@@ -242,6 +241,7 @@
             path: "{{ ou_base_dn }}"
             description: "Container for all PAM security groups"
             state: present
+            scope: one_level
           run_once: true
           register: pam_ou_result
           when: not enable_dry_run | bool
@@ -258,7 +258,7 @@
           register: group_result
           when: not enable_dry_run | bool
 
-        - name: GROUP | Add opsintel user to PAM group
+        - name: GROUP | Ensure opsintel user is member of PAM group
           microsoft.ad.group_membership:
             group_name: "{{ ad_group_name }}"
             members:
@@ -269,7 +269,7 @@
           when: not enable_dry_run | bool
 
         # ============================================
-        # GPO MANAGEMENT (Using microsoft.ad modules)
+        # GPO MANAGEMENT (Using community.windows.gpo)
         # ============================================
         - name: GPO | Ensure GPO exists
           community.windows.gpo:
@@ -330,7 +330,7 @@
             if ($Content -match "${GroupName}__Members") {
                 Write-Output "ALREADY_CONFIGURED"
             } else {
-                # Add Restricted Group entry
+                # Add Restricted Group entry using PAM group
                 $GroupEntry = "${GroupName}__Members = $DomainName\opsintel"
                 $GroupEntry2 = "${GroupName}__MemberOf = "
                 
@@ -359,9 +359,6 @@
           when: not enable_dry_run | bool
           no_log: true
 
-        # ============================================
-        # VERIFICATION
-        # ============================================
         - name: RESTRICTED | Verify configuration
           ansible.windows.win_shell: |
             $GPOName = "{{ gpo_name }}"
@@ -442,8 +439,9 @@
           - "  Target OU: {{ target_ou_dn }}"
           - ""
           - "OU Status:"
-          - "  LKM OU: EXISTS"
-          - "  Servers OU: EXISTS"
+          - "  LKM OU: {{ 'CREATED' if lkm_ou_result.changed else 'EXISTS' }}"
+          - "  Servers OU: {{ 'CREATED' if servers_ou_result.changed else 'EXISTS' }}"
+          - "  SQL OU: {{ 'CREATED' if sql_ou_result.changed else 'EXISTS' if server_type == 'SQL' else 'SKIPPED' }}"
           - "  Application OU: {{ 'CREATED' if app_ou_result.changed else 'EXISTS' }}"
           - "  PAM Groups OU: {{ 'CREATED' if pam_ou_result.changed else 'EXISTS' }}"
           - ""
