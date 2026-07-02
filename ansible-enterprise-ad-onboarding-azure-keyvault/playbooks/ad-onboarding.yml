@@ -5,6 +5,7 @@
   gather_subset:
     - min
   
+  # Use dedicated service account from vault
   vars_files:
     - ../vault.yml
   
@@ -105,23 +106,31 @@
       no_log: true
 
     # ============================================
-    # SERVER: Check existence (Must fail if not found)
+    # SERVER: Check existence with SearchBase for scope
     # ============================================
     - name: SERVER | Search for server in Active Directory
-      microsoft.ad.computer_info:
-        identity: "{{ server_name }}"
-        properties:
-          - DistinguishedName
-          - CanonicalName
-      register: server_info_result
-      failed_when: false
+      ansible.windows.win_shell: |
+        Import-Module ActiveDirectory -ErrorAction SilentlyContinue
+        $Computer = Get-ADComputer -Filter "Name -eq '{{ server_name }}'" -Properties DistinguishedName, CanonicalName -ErrorAction SilentlyContinue
+        if ($Computer) {
+            $Result = @{
+                Exists = $true
+                DN = $Computer.DistinguishedName
+                CanonicalName = $Computer.CanonicalName
+            }
+            $Result | ConvertTo-Json
+        } else {
+            '{"Exists": false}'
+        }
+      register: server_search
       no_log: true
+      changed_when: false
 
     - name: SERVER | Parse server information
       ansible.builtin.set_fact:
-        server_exists: "{{ server_info_result.objects | length > 0 }}"
-        server_dn: "{{ server_info_result.objects[0].DistinguishedName if server_info_result.objects | length > 0 else '' }}"
-        server_canonical: "{{ server_info_result.objects[0].CanonicalName if server_info_result.objects | length > 0 else '' }}"
+        server_info: "{{ server_search.stdout | from_json }}"
+        server_exists: "{{ (server_search.stdout | from_json).Exists | default(false) }}"
+      no_log: true
 
     - name: SERVER | Display server status
       ansible.builtin.debug:
@@ -131,7 +140,7 @@
           - "=========================================="
           - "Server Name: {{ server_name }}"
           - "Exists in AD: {{ 'YES' if server_exists else 'NO' }}"
-          - "Current Location: {{ server_canonical | default('N/A') }}"
+          - "Current Location: {{ server_info.CanonicalName | default('N/A') }}"
           - "=========================================="
 
     # ============================================
@@ -174,120 +183,194 @@
     - name: MAIN | Execute AD onboarding
       block:
         # ============================================
-        # OU MANAGEMENT (Using microsoft.ad.ou)
+        # OU MANAGEMENT
         # ============================================
         - name: OU | Ensure LKM OU exists
-          microsoft.ad.ou:
-            name: LKM
-            path: "{{ ou_base_dn }}"
-            description: "LKM Root OU for server management"
-            state: present
-            scope: one_level
+          ansible.windows.win_shell: |
+            Import-Module ActiveDirectory -ErrorAction Stop
+            $BaseDN = "{{ ou_base_dn }}"
+            $LKM = Get-ADOrganizationalUnit -Filter "Name -eq 'LKM'" -SearchBase $BaseDN -ErrorAction SilentlyContinue
+            if (-not $LKM) {
+                New-ADOrganizationalUnit -Name "LKM" -Path $BaseDN -Description "LKM Root OU for server management"
+                Write-Output "CREATED"
+            } else {
+                Write-Output "EXISTS"
+            }
           run_once: true
           register: lkm_ou_result
           when: not enable_dry_run | bool
+          changed_when: lkm_ou_result.stdout == "CREATED"
 
         - name: OU | Ensure Servers OU exists
-          microsoft.ad.ou:
-            name: Servers
-            path: "OU=LKM,{{ ou_base_dn }}"
-            description: "Container for all server OUs"
-            state: present
-            scope: one_level
+          ansible.windows.win_shell: |
+            Import-Module ActiveDirectory -ErrorAction Stop
+            $BaseDN = "{{ ou_base_dn }}"
+            $Servers = Get-ADOrganizationalUnit -Filter "Name -eq 'Servers'" -SearchBase "OU=LKM,$BaseDN" -ErrorAction SilentlyContinue
+            if (-not $Servers) {
+                New-ADOrganizationalUnit -Name "Servers" -Path "OU=LKM,$BaseDN" -Description "Container for all server OUs"
+                Write-Output "CREATED"
+            } else {
+                Write-Output "EXISTS"
+            }
           run_once: true
           register: servers_ou_result
           when: not enable_dry_run | bool
+          changed_when: servers_ou_result.stdout == "CREATED"
 
         - name: OU | Ensure SQL OU exists if needed
-          microsoft.ad.ou:
-            name: SQL
-            path: "OU=Servers,OU=LKM,{{ ou_base_dn }}"
-            description: "Container for SQL server OUs"
-            state: present
-            scope: one_level
+          ansible.windows.win_shell: |
+            Import-Module ActiveDirectory -ErrorAction Stop
+            $BaseDN = "{{ ou_base_dn }}"
+            if ("{{ server_type }}" -eq "SQL") {
+                $SQL = Get-ADOrganizationalUnit -Filter "Name -eq 'SQL'" -SearchBase "OU=Servers,OU=LKM,$BaseDN" -ErrorAction SilentlyContinue
+                if (-not $SQL) {
+                    New-ADOrganizationalUnit -Name "SQL" -Path "OU=Servers,OU=LKM,$BaseDN" -Description "Container for SQL server OUs"
+                    Write-Output "CREATED"
+                } else {
+                    Write-Output "EXISTS"
+                }
+            } else {
+                Write-Output "SKIPPED"
+            }
           run_once: true
           register: sql_ou_result
-          when: server_type == "SQL" and not enable_dry_run | bool
+          when: not enable_dry_run | bool
+          changed_when: sql_ou_result.stdout == "CREATED"
 
-        - name: OU | Ensure Application OU exists
-          microsoft.ad.ou:
-            name: "{{ application_name }}"
-            path: "{{ 'OU=SQL,OU=Servers,OU=LKM' if server_type == 'SQL' else 'OU=Servers,OU=LKM' }},{{ ou_base_dn }}"
-            description: "OU for {{ application_name }} application servers"
-            state: present
-            scope: one_level
+        - name: OU | Ensure Application OU exists with SearchBase
+          ansible.windows.win_shell: |
+            Import-Module ActiveDirectory -ErrorAction Stop
+            $BaseDN = "{{ ou_base_dn }}"
+            $ParentPath = "{{ 'OU=SQL,OU=Servers,OU=LKM' if server_type == 'SQL' else 'OU=Servers,OU=LKM' }}"
+            $SearchBase = "$ParentPath,$BaseDN"
+            $AppOU = Get-ADOrganizationalUnit -Filter "Name -eq '{{ application_name }}'" -SearchBase $SearchBase -ErrorAction SilentlyContinue
+            if (-not $AppOU) {
+                New-ADOrganizationalUnit -Name "{{ application_name }}" -Path $SearchBase -Description "OU for {{ application_name }} application servers"
+                Write-Output "CREATED"
+            } else {
+                Write-Output "EXISTS"
+            }
           run_once: true
           register: app_ou_result
           when: not enable_dry_run | bool
+          changed_when: app_ou_result.stdout == "CREATED"
 
         # ============================================
-        # COMPUTER MANAGEMENT (Using microsoft.ad.computer)
+        # COMPUTER MANAGEMENT
         # ============================================
         - name: COMPUTER | Move server to target OU
-          microsoft.ad.computer:
-            identity: "{{ server_name }}"
-            organizational_unit: "{{ target_ou_dn }}"
-            state: present
+          ansible.windows.win_shell: |
+            Import-Module ActiveDirectory -ErrorAction Stop
+            $TargetOU = "{{ target_ou_dn }}"
+            $Computer = Get-ADComputer -Identity "{{ server_name }}" -Properties DistinguishedName
+            $CurrentParent = ($Computer.DistinguishedName -split ',', 2)[1]
+            if ($CurrentParent -ne $TargetOU) {
+                Move-ADObject -Identity $Computer.DistinguishedName -TargetPath $TargetOU -Confirm:$false
+                Write-Output "MOVED"
+            } else {
+                Write-Output "EXISTS"
+            }
           run_once: true
           register: server_move
           when: server_exists and not enable_dry_run | bool
+          changed_when: server_move.stdout == "MOVED"
 
         # ============================================
-        # GROUP MANAGEMENT (Using microsoft.ad.group)
+        # GROUP MANAGEMENT
         # ============================================
         - name: GROUP | Ensure PAM Groups OU exists
-          microsoft.ad.ou:
-            name: PAM-Groups
-            path: "{{ ou_base_dn }}"
-            description: "Container for all PAM security groups"
-            state: present
-            scope: one_level
+          ansible.windows.win_shell: |
+            Import-Module ActiveDirectory -ErrorAction Stop
+            $BaseDN = "{{ ou_base_dn }}"
+            $PAMOU = Get-ADOrganizationalUnit -Filter "Name -eq 'PAM-Groups'" -SearchBase $BaseDN -ErrorAction SilentlyContinue
+            if (-not $PAMOU) {
+                New-ADOrganizationalUnit -Name "PAM-Groups" -Path $BaseDN -Description "Container for all PAM security groups"
+                Write-Output "CREATED"
+            } else {
+                Write-Output "EXISTS"
+            }
           run_once: true
           register: pam_ou_result
           when: not enable_dry_run | bool
+          changed_when: pam_ou_result.stdout == "CREATED"
 
-        - name: GROUP | Ensure PAM security group exists
-          microsoft.ad.group:
-            name: "{{ ad_group_name }}"
-            path: "OU=PAM-Groups,{{ ou_base_dn }}"
-            scope: global
-            category: security
-            description: "PAM group for {{ application_name }} ({{ server_type }} server)"
-            state: present
+        - name: GROUP | Ensure PAM security group exists with SearchBase
+          ansible.windows.win_shell: |
+            Import-Module ActiveDirectory -ErrorAction Stop
+            $GroupName = "{{ ad_group_name }}"
+            $GroupPath = "OU=PAM-Groups,{{ ou_base_dn }}"
+            $Group = Get-ADGroup -Filter "Name -eq '$GroupName'" -SearchBase $GroupPath -ErrorAction SilentlyContinue
+            if (-not $Group) {
+                New-ADGroup -Name $GroupName -GroupScope Global -GroupCategory Security -Path $GroupPath -Description "PAM group for {{ application_name }} ({{ server_type }} server)"
+                Write-Output "CREATED"
+            } else {
+                Write-Output "EXISTS"
+            }
           run_once: true
           register: group_result
           when: not enable_dry_run | bool
+          changed_when: group_result.stdout == "CREATED"
 
-        - name: GROUP | Ensure opsintel user is member of PAM group
-          microsoft.ad.group_membership:
-            group_name: "{{ ad_group_name }}"
-            members:
-              - opsintel
-            state: present
+        - name: GROUP | Add opsintel user to PAM group
+          ansible.windows.win_shell: |
+            Import-Module ActiveDirectory -ErrorAction Stop
+            $GroupName = "{{ ad_group_name }}"
+            $UserName = "opsintel"
+            
+            $UserExists = Get-ADUser -Filter "SamAccountName -eq '$UserName'" -ErrorAction SilentlyContinue
+            if (-not $UserExists) {
+                Write-Output "USER_NOT_FOUND"
+                exit 0
+            }
+            
+            $IsMember = Get-ADGroupMember -Identity $GroupName -ErrorAction SilentlyContinue | Where-Object { $_.SamAccountName -eq $UserName }
+            if ($IsMember) {
+                Write-Output "ALREADY_MEMBER"
+            } else {
+                Add-ADGroupMember -Identity $GroupName -Members $UserName
+                Write-Output "ADDED"
+            }
           run_once: true
           register: opsintel_result
           when: not enable_dry_run | bool
+          changed_when: opsintel_result.stdout == "ADDED"
 
         # ============================================
-        # GPO MANAGEMENT (Using community.windows.gpo)
+        # GPO MANAGEMENT
         # ============================================
         - name: GPO | Ensure GPO exists
-          community.windows.gpo:
-            name: "{{ gpo_name }}"
-            state: present
-            description: "GPO for {{ application_name }} ({{ server_type }} server)"
+          ansible.windows.win_shell: |
+            Import-Module GroupPolicy -ErrorAction Stop
+            $GPOName = "{{ gpo_name }}"
+            $GPO = Get-GPO -Name $GPOName -ErrorAction SilentlyContinue
+            if (-not $GPO) {
+                New-GPO -Name $GPOName -Comment "GPO for {{ application_name }} ({{ server_type }} server)"
+                Write-Output "CREATED"
+            } else {
+                Write-Output "EXISTS"
+            }
           run_once: true
           register: gpo_result
           when: not enable_dry_run | bool
+          changed_when: gpo_result.stdout == "CREATED"
 
         - name: GPO | Link GPO to Application OU
-          community.windows.gpo_link:
-            name: "{{ gpo_name }}"
-            target: "{{ target_ou_dn }}"
-            enabled: yes
+          ansible.windows.win_shell: |
+            Import-Module GroupPolicy -ErrorAction Stop
+            $GPOName = "{{ gpo_name }}"
+            $TargetOU = "{{ target_ou_dn }}"
+            $Links = Get-GPInheritance -Target $TargetOU -ErrorAction SilentlyContinue
+            $Linked = $Links.GpoLinks | Where-Object { $_.DisplayName -eq $GPOName }
+            if (-not $Linked) {
+                New-GPLink -Name $GPOName -Target $TargetOU -LinkEnabled Yes
+                Write-Output "LINKED"
+            } else {
+                Write-Output "EXISTS"
+            }
           run_once: true
           register: gpo_link_result
           when: not enable_dry_run | bool
+          changed_when: gpo_link_result.stdout == "LINKED"
 
         # ============================================
         # RESTRICTED GROUPS (With backup and safe method)
@@ -305,6 +388,7 @@
           register: gpo_backup
           when: not enable_dry_run | bool
           no_log: true
+          changed_when: gpo_backup.stdout == "BACKUP_CREATED"
 
         - name: RESTRICTED | Add PAM group to Administrators via GPO
           ansible.windows.win_shell: |
@@ -358,6 +442,7 @@
           register: rg_result
           when: not enable_dry_run | bool
           no_log: true
+          changed_when: rg_result.stdout == "CONFIGURED"
 
         - name: RESTRICTED | Verify configuration
           ansible.windows.win_shell: |
@@ -381,6 +466,7 @@
           register: verify_result
           when: not enable_dry_run | bool
           no_log: true
+          changed_when: false
 
         # ============================================
         # GPO REFRESH (Run on target server, not DC)
@@ -399,6 +485,7 @@
           register: gpupdate_result
           when: not enable_dry_run | bool
           ignore_errors: yes
+          changed_when: false
 
       rescue:
         - name: ERROR | Display failure message
@@ -439,21 +526,21 @@
           - "  Target OU: {{ target_ou_dn }}"
           - ""
           - "OU Status:"
-          - "  LKM OU: {{ 'CREATED' if lkm_ou_result.changed else 'EXISTS' }}"
-          - "  Servers OU: {{ 'CREATED' if servers_ou_result.changed else 'EXISTS' }}"
-          - "  SQL OU: {{ 'CREATED' if sql_ou_result.changed else 'EXISTS' if server_type == 'SQL' else 'SKIPPED' }}"
-          - "  Application OU: {{ 'CREATED' if app_ou_result.changed else 'EXISTS' }}"
-          - "  PAM Groups OU: {{ 'CREATED' if pam_ou_result.changed else 'EXISTS' }}"
+          - "  LKM OU: {{ 'CREATED' if lkm_ou_result.stdout == 'CREATED' else 'EXISTS' }}"
+          - "  Servers OU: {{ 'CREATED' if servers_ou_result.stdout == 'CREATED' else 'EXISTS' }}"
+          - "  SQL OU: {{ 'CREATED' if sql_ou_result.stdout == 'CREATED' else 'EXISTS' if server_type == 'SQL' else 'SKIPPED' }}"
+          - "  Application OU: {{ 'CREATED' if app_ou_result.stdout == 'CREATED' else 'EXISTS' }}"
+          - "  PAM Groups OU: {{ 'CREATED' if pam_ou_result.stdout == 'CREATED' else 'EXISTS' }}"
           - ""
           - "Server Status:"
           - "  Server in AD: YES"
-          - "  Server Moved: {{ 'YES' if server_move.changed else 'NO' }}"
+          - "  Server Moved: {{ 'YES' if server_move.stdout == 'MOVED' else 'NO' }}"
           - "  Confirmation Provided: {{ requester_confirmation | upper }}"
           - ""
           - "Security Configuration:"
           - "  PAM Group: {{ ad_group_name }}"
-          - "  PAM Group Status: {{ 'CREATED' if group_result.changed else 'EXISTS' }}"
-          - "  opsintel User: {{ 'ADDED' if opsintel_result.changed else 'ALREADY_MEMBER' }}"
+          - "  PAM Group Status: {{ 'CREATED' if group_result.stdout == 'CREATED' else 'EXISTS' }}"
+          - "  opsintel User: {{ opsintel_result.stdout | default('N/A') }}"
           - "  Restricted Group: {{ ad_group_name }}"
           - "  Restricted Group Member: {{ domain_name }}\\opsintel"
           - "  Restricted Group Status: {{ rg_result.stdout | default('CONFIGURED') }}"
@@ -461,8 +548,8 @@
           - ""
           - "GPO Status:"
           - "  GPO Name: {{ gpo_name }}"
-          - "  GPO Status: {{ 'CREATED' if gpo_result.changed else 'EXISTS' }}"
-          - "  GPO Link: {{ 'LINKED' if gpo_link_result.changed else 'ALREADY_LINKED' }}"
+          - "  GPO Status: {{ 'CREATED' if gpo_result.stdout == 'CREATED' else 'EXISTS' }}"
+          - "  GPO Link: {{ 'LINKED' if gpo_link_result.stdout == 'LINKED' else 'ALREADY_LINKED' }}"
           - "  GPO Backup: {{ gpo_backup.stdout | default('N/A') }}"
           - "  GPO Refresh: {{ gpupdate_result.stdout | default('N/A') }}"
           - ""
