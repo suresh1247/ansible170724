@@ -37,8 +37,6 @@
     ansible_winrm_transport: ntlm
     ansible_winrm_server_cert_validation: ignore
     ansible_port: 5985
-    ansible_become_method: runas
-    ansible_become_user: SYSTEM 
     ansible_winrm_operation_timeout_sec: 60
     ansible_winrm_read_timeout_sec: 120
 
@@ -55,23 +53,24 @@
       no_log: false
 
     # ============================================
-    # SAFETY: Require explicit approval
+    # SAFETY: Check approval - Exit gracefully if not approved
     # ============================================
-    - name: SAFETY | Require explicit approval before making AD changes
-      ansible.builtin.assert:
-        that:
-          - requester_confirmation | upper == 'YES'
-        fail_msg: |
-          ==========================================
-          ❌ CHANGE APPROVAL REQUIRED ❌
-          ==========================================
-          Change approval was not confirmed.
-          requester_confirmation must be YES.
-          Current value: {{ requester_confirmation }}
-          ==========================================
+    - name: SAFETY | Check if change approval is confirmed
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "📋 CHANGE APPROVAL STATUS"
+          - "=========================================="
+          - "Current requester_confirmation value: {{ requester_confirmation }}"
+          - "Approval Required: YES"
+          - "=========================================="
+
+    - name: SAFETY | Exit playbook gracefully when approval is not confirmed
+      ansible.builtin.meta: end_play
+      when: requester_confirmation | upper != 'YES'
 
     # ============================================
-    # VALIDATION: Input validation
+    # VALIDATION: Input validation (Only runs if approved)
     # ============================================
     - name: VALIDATION | Validate required parameters
       ansible.builtin.assert:
@@ -516,9 +515,29 @@
             msg: "AD Onboarding failed for {{ server_name }}"
 
   post_tasks:
+    # ============================================
+    # REPORT: Approval Not Given - Graceful Exit
+    # ============================================
+    - name: REPORT | Playbook skipped - Approval not confirmed
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "⏭️ PLAYBOOK SKIPPED - APPROVAL NOT CONFIRMED"
+          - "=========================================="
+          - "Requester Confirmation: {{ requester_confirmation }}"
+          - "Required: YES"
+          - ""
+          - "No changes were made to Active Directory."
+          - "No OUs, GPOs, or Groups were created."
+          - ""
+          - "To proceed, set requester_confirmation=YES"
+          - "=========================================="
+      when: requester_confirmation | upper != 'YES'
+
     - name: REPORT | Calculate operation duration
       ansible.builtin.set_fact:
         operation_duration: "{{ (ansible_date_time.epoch | int - operation_start_time | int) }}"
+      when: requester_confirmation | upper == 'YES'
 
     - name: REPORT | Final Status Report
       ansible.builtin.debug:
@@ -566,3 +585,4 @@
           - "  GPO Refresh: {{ gpupdate_result.stdout | default('N/A') }}"
           - ""
           - "=========================================="
+      when: requester_confirmation | upper == 'YES'
