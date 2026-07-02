@@ -5,181 +5,89 @@
   gather_subset:
     - min
   
+  # Use dedicated service account from vault
+  vars_files:
+    - ../vault.yml
+  
   vars:
-    # ============================================
-    # SERVICE NOW PARAMETERS (Passed from AAP)
-    # ============================================
-    server_name: "{{ server_name | mandatory }}"
-    application_name: "{{ application_name | mandatory }}"
-    domain_name: "{{ domain_name | mandatory }}"
-    requester_confirmation: "{{ requester_confirmation | mandatory }}"
-    
-    # ============================================
-    # AZURE KEY VAULT CONFIGURATION
-    # ============================================
-    kv_vault_url: "https://YOUR_VAULT_NAME.vault.azure.net/"
-    kv_secret_ad_username: "ad-username"
-    kv_secret_ad_password: "ad-password"
-    kv_secret_opsintel_username: "opsintel-username"
-    kv_secret_opsintel_password: "opsintel-password"
-    
-    # Azure Authentication - Option 1: Use AAP Azure Key Vault Credential
-    # These will be automatically injected if using AAP credential type
-    az_client_id: "{{ lookup('env', 'AZURE_CLIENT_ID') | default('') }}"
-    az_client_secret: "{{ lookup('env', 'AZURE_CLIENT_SECRET') | default('') }}"
-    az_tenant_id: "{{ lookup('env', 'AZURE_TENANT_ID') | default('') }}"
-    
-    # Option 2: Use Managed Identity (if running on Azure VM)
-    use_azure_msi: "{{ lookup('env', 'AZURE_USE_MSI') | default('false') | bool }}"
-    
-    # ============================================
-    # RETRIEVE CREDENTIALS FROM AZURE KEY VAULT
-    # ============================================
-    # Using Azure Key Vault lookup plugin
-    ad_username: >-
-      {% if use_azure_msi %}
-        {{ lookup('azure.azcollection.azure_keyvault_secret', kv_secret_ad_username, vault_url=kv_vault_url, use_msi=true) }}
-      {% else %}
-        {{ lookup('azure.azcollection.azure_keyvault_secret', kv_secret_ad_username, vault_url=kv_vault_url, client_id=az_client_id, secret=az_client_secret, tenant_id=az_tenant_id, use_msi=false) }}
-      {% endif %}
-    
-    ad_password: >-
-      {% if use_azure_msi %}
-        {{ lookup('azure.azcollection.azure_keyvault_secret', kv_secret_ad_password, vault_url=kv_vault_url, use_msi=true) }}
-      {% else %}
-        {{ lookup('azure.azcollection.azure_keyvault_secret', kv_secret_ad_password, vault_url=kv_vault_url, client_id=az_client_id, secret=az_client_secret, tenant_id=az_tenant_id, use_msi=false) }}
-      {% endif %}
-    
-    opsintel_username: >-
-      {% if use_azure_msi %}
-        {{ lookup('azure.azcollection.azure_keyvault_secret', kv_secret_opsintel_username, vault_url=kv_vault_url, use_msi=true) }}
-      {% else %}
-        {{ lookup('azure.azcollection.azure_keyvault_secret', kv_secret_opsintel_username, vault_url=kv_vault_url, client_id=az_client_id, secret=az_client_secret, tenant_id=az_tenant_id, use_msi=false) }}
-      {% endif %}
-    
-    opsintel_password: >-
-      {% if use_azure_msi %}
-        {{ lookup('azure.azcollection.azure_keyvault_secret', kv_secret_opsintel_password, vault_url=kv_vault_url, use_msi=true) }}
-      {% else %}
-        {{ lookup('azure.azcollection.azure_keyvault_secret', kv_secret_opsintel_password, vault_url=kv_vault_url, client_id=az_client_id, secret=az_client_secret, tenant_id=az_tenant_id, use_msi=false) }}
-      {% endif %}
-    
-    # ============================================
-    # ENTERPRISE SETTINGS
-    # ============================================
-    enable_dry_run: "{{ enable_dry_run | default(false) | bool }}"
-    ad_retries: "{{ ad_retries | default(3) }}"
-    ad_delay: "{{ ad_delay | default(5) }}"
+    # Enterprise settings
+    enable_dry_run: false
+    ad_retries: 3
+    ad_delay: 5
     
     # Operation tracking
     operation_id: "{{ lookup('password', '/dev/null length=12 chars=hex') | upper }}"
     operation_start_time: "{{ ansible_date_time.epoch }}"
-    environment: "{{ lookup('env', 'ANSIBLE_ENVIRONMENT') | default('production') }}"
     
-    # ============================================
-    # VALIDATION PATTERNS
-    # ============================================
+    # Validation patterns
     server_name_pattern: '^[A-Za-z][A-Za-z0-9-]{2,14}$'
     app_name_pattern: '^[A-Za-z][A-Za-z0-9_]{2,30}$'
     domain_name_pattern: '^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     
-    # ============================================
-    # AD CONFIGURATION
-    # ============================================
+    # Base OU path
     ou_base_dn: "DC={{ domain_name.replace('.', ',DC=') }}"
     
-    # Connection settings using Azure Key Vault credentials
-    ansible_user: "{{ ad_username }}"
-    ansible_password: "{{ ad_password }}"
+    # Credentials from vault (Service Account)
+    ad_username: "{{ ad_credentials.domain_admin_user }}"
+    ad_password: "{{ ad_credentials.vault_ad_password }}"
+    
+    # Connection settings from AAP Machine Credential
     ansible_connection: winrm
     ansible_winrm_transport: ntlm
     ansible_winrm_server_cert_validation: ignore
     ansible_port: 5985
     ansible_winrm_operation_timeout_sec: 60
     ansible_winrm_read_timeout_sec: 120
-    
-    # Become settings for privilege escalation
-    ansible_become: true
-    ansible_become_method: runas
-    ansible_become_user: SYSTEM
-    
-    # ============================================
-    # DEFAULT VALUES FOR REPORTING
-    # ============================================
-    ou_creation: { stdout: "EXISTS" }
-    group_creation: { stdout: "EXISTS" }
-    opsintel_add: { stdout: "ALREADY_MEMBER" }
-    gpo_creation: { stdout: "EXISTS" }
-    gpo_link: { stdout: "ALREADY_LINKED" }
-    restricted_group_config: { stdout: "CONFIGURED" }
-    gpupdate_result: { stdout: "INITIATED" }
-    server_move: { stdout: "NOT_MOVED" }
-    verify_restricted_group: { stdout: "VERIFIED" }
 
-  # ============================================
-  # PRE_TASKS: VALIDATION AND SERVER CHECK
-  # ============================================
   pre_tasks:
-    - name: VALIDATION | Validate required parameters from ServiceNow
+    # ============================================
+    # SAFETY: Require explicit approval
+    # ============================================
+    - name: SAFETY | Require explicit approval before making AD changes
       ansible.builtin.assert:
         that:
-          - server_name is defined and server_name | length > 0
-          - application_name is defined and application_name | length > 0
-          - domain_name is defined and domain_name | length > 0
-          - requester_confirmation is defined
-        fail_msg: "Missing required parameters from ServiceNow"
-        success_msg: "✓ All required parameters received from ServiceNow"
+          - requester_confirmation | upper == 'YES'
+        fail_msg: |
+          ==========================================
+          ❌ CHANGE APPROVAL REQUIRED ❌
+          ==========================================
+          Change approval was not confirmed.
+          requester_confirmation must be YES.
+          Current value: {{ requester_confirmation }}
+          ==========================================
+
+    # ============================================
+    # VALIDATION: Input validation
+    # ============================================
+    - name: VALIDATION | Validate required parameters
+      ansible.builtin.assert:
+        that:
+          - server_name is defined
+          - application_name is defined
+          - domain_name is defined
+        fail_msg: "Missing required parameters"
 
     - name: VALIDATION | Validate server name format
       ansible.builtin.assert:
         that:
           - server_name is match(server_name_pattern)
-          - server_name | length >= 3
-          - server_name | length <= 15
         fail_msg: "Invalid server name '{{ server_name }}'"
-        success_msg: "✓ Server name validation passed"
 
     - name: VALIDATION | Validate application name format
       ansible.builtin.assert:
         that:
           - application_name is match(app_name_pattern)
-          - application_name | length >= 3
-          - application_name | length <= 30
         fail_msg: "Invalid application name '{{ application_name }}'"
-        success_msg: "✓ Application name validation passed"
 
     - name: VALIDATION | Validate domain name format
       ansible.builtin.assert:
         that:
           - domain_name is match(domain_name_pattern)
         fail_msg: "Invalid domain name format: {{ domain_name }}"
-        success_msg: "✓ Domain name validation passed"
 
-    - name: VALIDATION | Validate confirmation flag
-      ansible.builtin.assert:
-        that:
-          - requester_confirmation | upper in ['YES', 'NO']
-        fail_msg: "Requester confirmation must be YES or NO"
-        success_msg: "✓ Confirmation flag validation passed"
-
-    - name: VALIDATION | Debug credential source
-      ansible.builtin.debug:
-        msg:
-          - "=========================================="
-          - "CREDENTIAL SOURCE: Azure Key Vault"
-          - "=========================================="
-          - "Vault URL: {{ kv_vault_url }}"
-          - "Username Secret: {{ kv_secret_ad_username }}"
-          - "Password Secret: {{ kv_secret_ad_password }}"
-          - "Using Managed Identity: {{ use_azure_msi }}"
-          - "Username retrieved: {{ ad_username }}"
-          - "=========================================="
-
-    - name: VALIDATION | Check for dry run mode
-      ansible.builtin.debug:
-        msg: "⚠️ DRY RUN MODE ENABLED - No changes will be made to Active Directory"
-      when: enable_dry_run | bool
-
+    # ============================================
+    # CONNECTION: Test connectivity
+    # ============================================
     - name: CONNECTION | Test connectivity to domain controller
       ansible.windows.win_ping:
       register: ping_test
@@ -187,53 +95,27 @@
       retries: "{{ ad_retries }}"
       delay: "{{ ad_delay }}"
 
-    - name: CONNECTION | Display connection information
-      ansible.builtin.debug:
-        msg:
-          - "Connected to: {{ ansible_hostname }}"
-          - "IP Address: {{ ansible_default_ipv4.address | default('N/A') }}"
-          - "OS: {{ ansible_os_name }}"
-          - "Domain: {{ ansible_domain | default('N/A') }}"
-
     - name: CONNECTION | Verify Active Directory module
       ansible.windows.win_shell: |
         Import-Module ActiveDirectory -ErrorAction Stop
-        $DomainInfo = Get-ADDomain
-        Write-Output "SUCCESS|Domain:$($DomainInfo.DNSRoot)|Controllers:$($DomainInfo.ReplicaDirectoryServers.Count)"
+        Get-ADDomain | Select-Object DNSRoot
       register: ad_verify
       until: ad_verify is success
       retries: "{{ ad_retries }}"
       delay: "{{ ad_delay }}"
-
-    - name: CONNECTION | Parse AD information
-      ansible.builtin.set_fact:
-        domain_fqdn: "{{ ad_verify.stdout.split('|')[1].split(':')[1] }}"
-        dc_count: "{{ ad_verify.stdout.split('|')[2].split(':')[1] }}"
-
-    - name: CONNECTION | Display AD information
-      ansible.builtin.debug:
-        msg:
-          - "AD Domain: {{ domain_fqdn }}"
-          - "Domain Controllers: {{ dc_count }}"
+      no_log: true
 
     # ============================================
-    # CRITICAL: Check Server Existence FIRST
+    # SERVER: Check existence (Must fail if not found)
     # ============================================
     - name: SERVER | Search for server in Active Directory
       ansible.windows.win_shell: |
         Import-Module ActiveDirectory -ErrorAction SilentlyContinue
-        $Computer = Get-ADComputer -Filter "Name -eq '{{ server_name }}'" `
-            -Properties DistinguishedName, Enabled, LastLogonDate, OperatingSystem, Created, Modified, CanonicalName `
-            -ErrorAction SilentlyContinue
+        $Computer = Get-ADComputer -Filter "Name -eq '{{ server_name }}'" -Properties DistinguishedName, CanonicalName -ErrorAction SilentlyContinue
         if ($Computer) {
             $Result = @{
                 Exists = $true
                 DN = $Computer.DistinguishedName
-                Enabled = $Computer.Enabled
-                LastLogon = if ($Computer.LastLogonDate) { $Computer.LastLogonDate.ToString("yyyy-MM-dd HH:mm:ss") } else { "Never" }
-                OS = $Computer.OperatingSystem
-                Created = $Computer.Created.ToString("yyyy-MM-dd HH:mm:ss")
-                Modified = $Computer.Modified.ToString("yyyy-MM-dd HH:mm:ss")
                 CanonicalName = $Computer.CanonicalName
             }
             $Result | ConvertTo-Json
@@ -241,11 +123,13 @@
             '{"Exists": false}'
         }
       register: server_search
+      no_log: true
 
     - name: SERVER | Parse server information
       ansible.builtin.set_fact:
         server_info: "{{ server_search.stdout | from_json }}"
         server_exists: "{{ (server_search.stdout | from_json).Exists | default(false) }}"
+      no_log: true
 
     - name: SERVER | Display server status
       ansible.builtin.debug:
@@ -256,45 +140,32 @@
           - "Server Name: {{ server_name }}"
           - "Exists in AD: {{ 'YES' if server_exists else 'NO' }}"
           - "Current Location: {{ server_info.CanonicalName | default('N/A') }}"
-          - "Status: {{ 'Enabled' if server_info.Enabled else 'Disabled' if server_exists else 'N/A' }}"
-          - "Created: {{ server_info.Created | default('N/A') }}"
-          - "Last Logon: {{ server_info.LastLogon | default('N/A') }}"
           - "=========================================="
 
     # ============================================
-    # STOP PLAYBOOK IF SERVER DOES NOT EXIST
+    # SERVER: Hard fail if not found
     # ============================================
-    - name: SERVER | Stop playbook - Server not found in AD
+    - name: SERVER | Stop playbook when server is not found in AD
       ansible.builtin.fail:
         msg: |
           ==========================================
-          ❌ OPERATION STOPPED ❌
+          ❌ SERVER NOT FOUND ❌
           ==========================================
-          Server '{{ server_name }}' was NOT found in Active Directory.
+          Server '{{ server_name }}' was not found in Active Directory.
           
-          No OUs, GPOs, or Groups will be created.
+          No OUs, GPOs, or Groups were created.
           
           Please verify:
           1. The server name is correct
           2. The server is joined to the domain
           3. The server exists in Active Directory
-          
-          Request from ServiceNow for server: {{ server_name }}
-          Application: {{ application_name }}
-          Domain: {{ domain_name }}
           ==========================================
-      when: 
-        - not server_exists
-        - requester_confirmation | upper == 'NO'
+      when: not server_exists | bool
 
-    - name: SERVER | Continue message when server not found but confirmation is YES
-      ansible.builtin.debug:
-        msg: "⚠️ Server {{ server_name }} not found in AD but confirmation is YES. Creating OU and GPO only."
-      when: 
-        - not server_exists
-        - requester_confirmation | upper == 'YES'
-
-    - name: SERVER | Set server type and target OU (only if server exists)
+    # ============================================
+    # CONFIGURATION: Set server details
+    # ============================================
+    - name: SERVER | Set server type and target OU
       ansible.builtin.set_fact:
         server_type: "{{ 'SQL' if 'SQL' in server_name | upper else 'NON-SQL' }}"
         target_ou_dn: >-
@@ -306,102 +177,295 @@
         app_prefix: "{{ application_name[:3] | upper }}"
         ad_group_name: "{{ application_name[:3] | upper }}-PAM-{{ application_name }}{{ 'SQL' if ('SQL' in server_name | upper) else '' }}"
         gpo_name: "{{ application_name[:3] | upper }}-SRV-{{ application_name }}{{ 'SQL' if ('SQL' in server_name | upper) else '' }}"
-      when: server_exists
 
-  # ============================================
-  # MAIN TASKS: AD ONBOARDING
-  # ============================================
   tasks:
-    - name: MAIN | Execute AD onboarding (Only if server exists)
+    - name: MAIN | Execute AD onboarding
       block:
-        - name: Include validation role
-          ansible.builtin.include_role:
-            name: ad_validation
+        # ============================================
+        # OU MANAGEMENT (Using microsoft.ad modules)
+        # ============================================
+        - name: OU | Ensure LKM OU exists
+          microsoft.ad.ou:
+            name: LKM
+            path: "{{ ou_base_dn }}"
+            description: "LKM Root OU for server management"
+            state: present
+          run_once: true
+          when: not enable_dry_run | bool
+
+        - name: OU | Ensure Servers OU exists
+          microsoft.ad.ou:
+            name: Servers
+            path: "OU=LKM,{{ ou_base_dn }}"
+            description: "Container for all server OUs"
+            state: present
+          run_once: true
+          when: not enable_dry_run | bool
+
+        - name: OU | Ensure SQL OU exists if needed
+          microsoft.ad.ou:
+            name: SQL
+            path: "OU=Servers,OU=LKM,{{ ou_base_dn }}"
+            description: "Container for SQL server OUs"
+            state: present
+          run_once: true
+          when: server_type == "SQL" and not enable_dry_run | bool
+
+        - name: OU | Ensure Application OU exists
+          microsoft.ad.ou:
+            name: "{{ application_name }}"
+            path: "{{ 'OU=SQL,OU=Servers,OU=LKM' if server_type == 'SQL' else 'OU=Servers,OU=LKM' }},{{ ou_base_dn }}"
+            description: "OU for {{ application_name }} application servers"
+            state: present
+          run_once: true
+          register: app_ou_result
+          when: not enable_dry_run | bool
+
+        # ============================================
+        # COMPUTER MANAGEMENT (Using microsoft.ad modules)
+        # ============================================
+        - name: COMPUTER | Move server to target OU
+          microsoft.ad.computer:
+            name: "{{ server_name }}"
+            state: present
+            organizational_unit: "{{ target_ou_dn }}"
+          run_once: true
+          register: server_move
           when: server_exists and not enable_dry_run | bool
 
-        - name: Include OU management role
-          ansible.builtin.include_role:
-            name: ad_ou_management
-          when: server_exists and not enable_dry_run | bool
+        # ============================================
+        # GROUP MANAGEMENT (Using microsoft.ad modules)
+        # ============================================
+        - name: GROUP | Ensure PAM Groups OU exists
+          microsoft.ad.ou:
+            name: PAM-Groups
+            path: "{{ ou_base_dn }}"
+            description: "Container for all PAM security groups"
+            state: present
+          run_once: true
+          register: pam_ou_result
+          when: not enable_dry_run | bool
 
-        - name: Include computer management role
-          ansible.builtin.include_role:
-            name: ad_computer_management
-          when: server_exists and not enable_dry_run | bool
+        - name: GROUP | Ensure PAM security group exists
+          microsoft.ad.group:
+            name: "{{ ad_group_name }}"
+            path: "OU=PAM-Groups,{{ ou_base_dn }}"
+            scope: global
+            category: security
+            description: "PAM group for {{ application_name }} ({{ server_type }} server)"
+            state: present
+          run_once: true
+          register: group_result
+          when: not enable_dry_run | bool
 
-        - name: Include group management role
-          ansible.builtin.include_role:
-            name: ad_group_management
-          when: server_exists and not enable_dry_run | bool
+        - name: GROUP | Add opsintel user to PAM group
+          microsoft.ad.group_membership:
+            group_name: "{{ ad_group_name }}"
+            members:
+              - opsintel
+            state: present
+          run_once: true
+          register: opsintel_result
+          when: not enable_dry_run | bool
 
-        - name: Include GPO management role
-          ansible.builtin.include_role:
-            name: ad_gpo_management
-          when: server_exists and not enable_dry_run | bool
+        # ============================================
+        # GPO MANAGEMENT (Using microsoft.ad modules)
+        # ============================================
+        - name: GPO | Ensure GPO exists
+          community.windows.gpo:
+            name: "{{ gpo_name }}"
+            state: present
+            description: "GPO for {{ application_name }} ({{ server_type }} server)"
+          run_once: true
+          register: gpo_result
+          when: not enable_dry_run | bool
 
-        - name: Include restricted groups role
-          ansible.builtin.include_role:
-            name: ad_restricted_groups
-          when: server_exists and not enable_dry_run | bool
+        - name: GPO | Link GPO to Application OU
+          community.windows.gpo_link:
+            name: "{{ gpo_name }}"
+            target: "{{ target_ou_dn }}"
+            enabled: yes
+          run_once: true
+          register: gpo_link_result
+          when: not enable_dry_run | bool
 
-        - name: Include reporting role
-          ansible.builtin.include_role:
-            name: ad_reporting
-          when: server_exists
+        # ============================================
+        # RESTRICTED GROUPS (With backup and safe method)
+        # ============================================
+        - name: RESTRICTED | Backup GPO before modification
+          ansible.windows.win_shell: |
+            $GPOName = "{{ gpo_name }}"
+            $BackupPath = "C:\\GPO_Backups"
+            if (-not (Test-Path $BackupPath)) {
+                New-Item -Path $BackupPath -ItemType Directory -Force
+            }
+            Backup-GPO -Name $GPOName -Path $BackupPath -Comment "Backup before Restricted Groups configuration - {{ operation_id }}"
+            Write-Output "BACKUP_CREATED"
+          run_once: true
+          register: gpo_backup
+          when: not enable_dry_run | bool
+          no_log: true
 
-      when: server_exists
+        - name: RESTRICTED | Add PAM group to Administrators via GPO
+          ansible.windows.win_shell: |
+            $GPOName = "{{ gpo_name }}"
+            $DomainName = "{{ domain_name }}"
+            $GroupName = "{{ ad_group_name }}"
+            
+            Import-Module GroupPolicy -ErrorAction Stop
+            $GPO = Get-GPO -Name $GPOName
+            $GPOId = $GPO.Id.ToString()
+            $SecEditPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\Machine\Microsoft\Windows NT\SecEdit"
+            if (-not (Test-Path $SecEditPath)) { New-Item -Path $SecEditPath -ItemType Directory -Force | Out-Null }
+            
+            $GptTmplPath = Join-Path $SecEditPath "GptTmpl.inf"
+            
+            # Read existing content
+            $Content = ""
+            if (Test-Path $GptTmplPath) {
+                $Content = Get-Content $GptTmplPath -Raw
+            }
+            
+            # Check if group is already configured
+            if ($Content -match "${GroupName}__Members") {
+                Write-Output "ALREADY_CONFIGURED"
+            } else {
+                # Add Restricted Group entry
+                $GroupEntry = "${GroupName}__Members = $DomainName\opsintel"
+                $GroupEntry2 = "${GroupName}__MemberOf = "
+                
+                if ($Content -match "\[Group Membership\]") {
+                    $Content = $Content -replace "\[Group Membership\]", "[Group Membership]`n$GroupEntry`n$GroupEntry2"
+                } else {
+                    $Content += "`n[Group Membership]`n$GroupEntry`n$GroupEntry2"
+                }
+                
+                $Content | Set-Content -Path $GptTmplPath -Force -Encoding ASCII
+                
+                # Update GPO version
+                $GptIniPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\GPT.INI"
+                if (Test-Path $GptIniPath) {
+                    $GptIni = Get-Content $GptIniPath -Raw
+                    if ($GptIni -match "Version=(\d+)") {
+                        $NewVersion = [int]$matches[1] + 1
+                        $GptIni = $GptIni -replace "Version=$($matches[1])", "Version=$NewVersion"
+                        $GptIni | Set-Content $GptIniPath -Force
+                    }
+                }
+                Write-Output "CONFIGURED"
+            }
+          run_once: true
+          register: rg_result
+          when: not enable_dry_run | bool
+          no_log: true
 
-  # ============================================
-  # POST_TASKS: FINAL SUMMARY
-  # ============================================
+        # ============================================
+        # VERIFICATION
+        # ============================================
+        - name: RESTRICTED | Verify configuration
+          ansible.windows.win_shell: |
+            $GPOName = "{{ gpo_name }}"
+            $DomainName = "{{ domain_name }}"
+            $GroupName = "{{ ad_group_name }}"
+            $GPO = Get-GPO -Name $GPOName
+            $GPOId = $GPO.Id.ToString()
+            $GptTmplPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf"
+            if (Test-Path $GptTmplPath) {
+                $Content = Get-Content $GptTmplPath -Raw
+                if ($Content -match "${GroupName}__Members") {
+                    Write-Output "VERIFIED"
+                } else {
+                    Write-Output "NOT_VERIFIED"
+                }
+            } else {
+                Write-Output "FILE_NOT_FOUND"
+            }
+          run_once: true
+          register: verify_result
+          when: not enable_dry_run | bool
+          no_log: true
+
+        # ============================================
+        # GPO REFRESH (Run on target server, not DC)
+        # ============================================
+        - name: GPO | Trigger policy refresh on target server
+          ansible.windows.win_shell: |
+            $ServerName = "{{ server_name }}"
+            try {
+                Invoke-GPUpdate -Computer $ServerName -RandomDelayInMinutes 0 -Force -ErrorAction Stop
+                Write-Output "GPUPDATE_INITIATED"
+            }
+            catch {
+                Write-Output "GPUPDATE_FAILED: $($_.Exception.Message)"
+            }
+          run_once: true
+          register: gpupdate_result
+          when: not enable_dry_run | bool
+          ignore_errors: yes
+
+      rescue:
+        - name: ERROR | Display failure message
+          ansible.builtin.debug:
+            msg:
+              - "=========================================="
+              - "❌ AD ONBOARDING FAILED"
+              - "=========================================="
+              - "Operation ID: {{ operation_id }}"
+              - "Server: {{ server_name }}"
+              - "Error: {{ ansible_failed_result.msg | default('Unknown error') }}"
+              - "=========================================="
+
+        - name: ERROR | Re-raise failure
+          ansible.builtin.fail:
+            msg: "AD Onboarding failed for {{ server_name }}"
+
   post_tasks:
-    - name: REPORT | Server not found - Final summary
-      ansible.builtin.debug:
-        msg:
-          - "=========================================="
-          - "❌ AD ONBOARDING CANCELLED"
-          - "=========================================="
-          - "Operation ID: {{ operation_id }}"
-          - "Server: {{ server_name }}"
-          - "Application: {{ application_name }}"
-          - "Domain: {{ domain_name }}"
-          - "Status: FAILED - Server Not Found in Active Directory"
-          - ""
-          - "No changes were made to Active Directory."
-          - "No OUs, GPOs, or Groups were created."
-          - ""
-          - "Please verify the server name and try again."
-          - "ServiceNow Request ID: {{ servicenow_request_id | default('N/A') }}"
-          - "=========================================="
-      when: not server_exists
+    - name: REPORT | Calculate operation duration
+      ansible.builtin.set_fact:
+        operation_duration: "{{ (ansible_date_time.epoch | int - operation_start_time | int) }}"
 
-    - name: REPORT | Success - Final summary
+    - name: REPORT | Final Status Report
       ansible.builtin.debug:
         msg:
           - "=========================================="
-          - "✅ AD ONBOARDING COMPLETED SUCCESSFULLY"
+          - "✅ ACTIVE DIRECTORY ONBOARDING COMPLETED"
           - "=========================================="
           - "Operation ID: {{ operation_id }}"
-          - "Environment: {{ environment }}"
-          - "Duration: {{ (ansible_date_time.epoch | int - operation_start_time | int) }} seconds"
+          - "Duration: {{ operation_duration }} seconds"
+          - "Dry Run: {{ 'YES' if enable_dry_run else 'NO' }}"
           - ""
-          - "ServiceNow Details:"
-          - "  Server: {{ server_name }}"
-          - "  Application: {{ application_name }}"
+          - "Server Details:"
+          - "  Server Name: {{ server_name }}"
           - "  Domain: {{ domain_name }}"
-          - "  Confirmation: {{ requester_confirmation }}"
-          - "  Request ID: {{ servicenow_request_id | default('N/A') }}"
+          - "  Application: {{ application_name }}"
+          - "  Server Type: {{ server_type }}"
+          - "  Target OU: {{ target_ou_dn }}"
           - ""
-          - "Azure Key Vault:"
-          - "  Vault URL: {{ kv_vault_url }}"
-          - "  Username Secret: {{ kv_secret_ad_username }}"
-          - "  Using Managed Identity: {{ use_azure_msi }}"
+          - "OU Status:"
+          - "  LKM OU: EXISTS"
+          - "  Servers OU: EXISTS"
+          - "  Application OU: {{ 'CREATED' if app_ou_result.changed else 'EXISTS' }}"
+          - "  PAM Groups OU: {{ 'CREATED' if pam_ou_result.changed else 'EXISTS' }}"
           - ""
-          - "AD Changes:"
-          - "  OU Created: {{ 'YES' if app_ou_result is defined and app_ou_result == 'CREATED' else 'NO' }}"
-          - "  Server Moved: {{ 'YES' if server_move.stdout is defined and 'MOVED_SUCCESSFULLY' in server_move.stdout else 'NO' }}"
+          - "Server Status:"
+          - "  Server in AD: YES"
+          - "  Server Moved: {{ 'YES' if server_move.changed else 'NO' }}"
+          - "  Confirmation Provided: {{ requester_confirmation | upper }}"
+          - ""
+          - "Security Configuration:"
           - "  PAM Group: {{ ad_group_name }}"
-          - "  GPO: {{ gpo_name }}"
-          - "  Restricted Groups: Administrators with {{ domain_name }}\\opsintel"
+          - "  PAM Group Status: {{ 'CREATED' if group_result.changed else 'EXISTS' }}"
+          - "  opsintel User: {{ 'ADDED' if opsintel_result.changed else 'ALREADY_MEMBER' }}"
+          - "  Restricted Group: {{ ad_group_name }}"
+          - "  Restricted Group Member: {{ domain_name }}\\opsintel"
+          - "  Restricted Group Status: {{ rg_result.stdout | default('CONFIGURED') }}"
+          - "  Verification: {{ verify_result.stdout | default('VERIFIED') }}"
+          - ""
+          - "GPO Status:"
+          - "  GPO Name: {{ gpo_name }}"
+          - "  GPO Status: {{ 'CREATED' if gpo_result.changed else 'EXISTS' }}"
+          - "  GPO Link: {{ 'LINKED' if gpo_link_result.changed else 'ALREADY_LINKED' }}"
+          - "  GPO Backup: {{ gpo_backup.stdout | default('N/A') }}"
+          - "  GPO Refresh: {{ gpupdate_result.stdout | default('N/A') }}"
+          - ""
           - "=========================================="
-      when: server_exists
