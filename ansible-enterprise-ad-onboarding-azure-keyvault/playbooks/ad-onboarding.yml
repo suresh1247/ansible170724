@@ -10,7 +10,7 @@
 
   vars:
     # Azure Key Vault configuration
-    azure_vault_url: "https://ansible-aap-kv.vault.azure.net"
+    azure_vault_url: "https://adonboarding-keyvault.vault.azure.net/"
 
     # Retrieve credentials from Azure Key Vault using Managed Identity
     ad_username: "{{ lookup('azure.azcollection.azure_keyvault_secret', 'ad-username', vault_url=azure_vault_url, use_msi=true) }}"
