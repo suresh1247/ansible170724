@@ -4,54 +4,56 @@
   gather_facts: yes
   gather_subset:
     - min
-  
-  vars_files:
-    - ../vault.yml
-  
+
+  collections:
+    - azure.azcollection
+
   vars:
+    # Azure Key Vault configuration
+    azure_vault_url: "https://ansible-aap-kv.vault.azure.net"
+
+    # Retrieve credentials from Azure Key Vault
+    ad_username: "{{ lookup('azure.azcollection.azure_keyvault_secret', 'ad-username', vault_url=azure_vault_url) }}"
+    ad_password: "{{ lookup('azure.azcollection.azure_keyvault_secret', 'ad-password', vault_url=azure_vault_url) }}"
+    opsintel_username: "{{ lookup('azure.azcollection.azure_keyvault_secret', 'opsintel-username', vault_url=azure_vault_url) }}"
+
     # Enterprise settings
     enable_dry_run: false
     ad_retries: 3
     ad_delay: 5
-    
+
     # Operation tracking
     operation_id: "{{ lookup('password', '/dev/null length=12 chars=hex') | upper }}"
     operation_start_time: "{{ ansible_date_time.epoch }}"
-    
+
     # Validation patterns
     server_name_pattern: '^[A-Za-z][A-Za-z0-9-]{2,14}$'
     app_name_pattern: '^[A-Za-z][A-Za-z0-9_]{2,30}$'
     domain_name_pattern: '^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-    
+
     # Base OU path
     ou_base_dn: "DC={{ domain_name.replace('.', ',DC=') }}"
-    
-    # Extract credentials from vault
-    ad_username: "{{ ad_credentials.domain_admin_user }}"
-    ad_password: "{{ ad_credentials.vault_ad_password }}"
-    
-    # Connection settings - credentials from vault
-    ansible_user: "{{ ad_credentials.domain_admin_user }}"
-    ansible_password: "{{ ad_credentials.vault_ad_password }}"
+
+    # Connection settings - credentials from Azure Key Vault
+    ansible_user: "{{ ad_username }}"
+    ansible_password: "{{ ad_password }}"
     ansible_connection: winrm
     ansible_winrm_transport: ntlm
     ansible_winrm_server_cert_validation: ignore
     ansible_port: 5985
     ansible_winrm_operation_timeout_sec: 60
-    ansible_become_method: runas
-    ansible_become_user: SYSTEM 
     ansible_winrm_read_timeout_sec: 120
 
   pre_tasks:
     # ============================================
-    # DEBUG: Verify credentials are loaded
+    # DEBUG: Verify credentials loaded from Azure
     # ============================================
-    - name: DEBUG | Verify vault credentials loaded
+    - name: DEBUG | Verify Azure Key Vault credentials loaded
       ansible.builtin.debug:
         msg:
-          - "Vault credentials loaded successfully"
-          - "Username: {{ ad_credentials.domain_admin_user }}"
-          - "Domain: {{ ansible_service_account.domain | default('N/A') }}"
+          - "Azure Key Vault credentials loaded successfully"
+          - "Username: {{ ad_username }}"
+          - "opsintel: {{ opsintel_username }}"
       no_log: false
 
     # ============================================
@@ -72,7 +74,7 @@
       when: requester_confirmation | upper != 'YES'
 
     # ============================================
-    # VALIDATION: Input validation (Only runs if approved)
+    # VALIDATION: Input validation
     # ============================================
     - name: VALIDATION | Validate required parameters
       ansible.builtin.assert:
@@ -121,7 +123,7 @@
       no_log: true
 
     # ============================================
-    # SERVER: Check existence with SearchBase for scope
+    # SERVER: Check existence
     # ============================================
     - name: SERVER | Search for server in Active Directory
       ansible.windows.win_shell: |
@@ -168,9 +170,9 @@
           ❌ SERVER NOT FOUND ❌
           ==========================================
           Server '{{ server_name }}' was not found in Active Directory.
-          
+
           No OUs, GPOs, or Groups were created.
-          
+
           Please verify:
           1. The server name is correct
           2. The server is joined to the domain
@@ -331,13 +333,13 @@
             Import-Module ActiveDirectory -ErrorAction Stop
             $GroupName = "{{ ad_group_name }}"
             $UserName = "opsintel"
-            
+
             $UserExists = Get-ADUser -Filter "SamAccountName -eq '$UserName'" -ErrorAction SilentlyContinue
             if (-not $UserExists) {
                 Write-Output "USER_NOT_FOUND"
                 exit 0
             }
-            
+
             $IsMember = Get-ADGroupMember -Identity $GroupName -ErrorAction SilentlyContinue | Where-Object { $_.SamAccountName -eq $UserName }
             if ($IsMember) {
                 Write-Output "ALREADY_MEMBER"
@@ -410,36 +412,36 @@
             $GPOName = "{{ gpo_name }}"
             $DomainName = "{{ domain_name }}"
             $GroupName = "{{ ad_group_name }}"
-            
+
             Import-Module GroupPolicy -ErrorAction Stop
             $GPO = Get-GPO -Name $GPOName
             $GPOId = $GPO.Id.ToString()
             $SecEditPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\Machine\Microsoft\Windows NT\SecEdit"
             if (-not (Test-Path $SecEditPath)) { New-Item -Path $SecEditPath -ItemType Directory -Force | Out-Null }
-            
+
             $GptTmplPath = Join-Path $SecEditPath "GptTmpl.inf"
-            
+
             # Read existing content
             $Content = ""
             if (Test-Path $GptTmplPath) {
                 $Content = Get-Content $GptTmplPath -Raw
             }
-            
+
             # Check if group is already configured
             if ($Content -match "${GroupName}__Members") {
                 Write-Output "ALREADY_CONFIGURED"
             } else {
                 $GroupEntry = "${GroupName}__Members = $DomainName\opsintel"
                 $GroupEntry2 = "${GroupName}__MemberOf = "
-                
+
                 if ($Content -match "\[Group Membership\]") {
                     $Content = $Content -replace "\[Group Membership\]", "[Group Membership]`n$GroupEntry`n$GroupEntry2"
                 } else {
                     $Content += "`n[Group Membership]`n$GroupEntry`n$GroupEntry2"
                 }
-                
+
                 $Content | Set-Content -Path $GptTmplPath -Force -Encoding ASCII
-                
+
                 $GptIniPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\GPT.INI"
                 if (Test-Path $GptIniPath) {
                     $GptIni = Get-Content $GptIniPath -Raw
