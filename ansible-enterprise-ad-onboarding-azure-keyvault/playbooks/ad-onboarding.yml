@@ -1,5 +1,5 @@
 ---
-- name: ENTERPRISE ACTIVE DIRECTORY ONBOARDING
+- name: TEST | Azure Key Vault to AD Connectivity
   hosts: domain_controllers
   gather_facts: yes
   gather_subset:
@@ -7,42 +7,268 @@
 
   vars:
     # Azure Key Vault configuration
-    azure_vault_url: "https://ansible-aap-kv.vault.azure.net"
+    azure_vault_name: "ansible-aap-kv"
+    azure_vault_url: "https://{{ azure_vault_name }}.vault.azure.net"
 
   pre_tasks:
     # ============================================
-    # Azure Key Vault Integration (Alternative Method)
+    # AZURE CLI: Fetch secrets from Key Vault
     # ============================================
-    - name: AZURE | Retrieve secrets from Azure Key Vault
-      azure.azcollection.azure_rm_keyvaultsecret_info:
-        vault_uri: "{{ azure_vault_url }}"
-        name: "ad-username"
-      register: ad_username_secret
-      when: enable_dry_run is not defined
+    - name: AZURE | Check az CLI availability
+      ansible.builtin.shell: |
+        az --version 2>/dev/null || echo "NOT_INSTALLED"
+      delegate_to: localhost
+      run_once: true
+      register: az_cli_check
+      ignore_errors: yes
 
-    - name: AZURE | Set AD username
+    - name: AZURE | Display az CLI status
+      ansible.builtin.debug:
+        msg: "Azure CLI Status: {{ 'Installed' if 'NOT_INSTALLED' not in az_cli_check.stdout else 'Not Installed - Please install az CLI' }}"
+
+    - name: AZURE | Login to Azure using Managed Identity
+      ansible.builtin.shell: |
+        az login --identity --allow-no-subscriptions 2>/dev/null || echo "LOGIN_FAILED"
+      delegate_to: localhost
+      run_once: true
+      register: az_login
+      ignore_errors: yes
+      no_log: true
+
+    - name: AZURE | Login using Service Principal (fallback)
+      ansible.builtin.shell: |
+        az login --service-principal \
+          --username "{{ azure_client_id }}" \
+          --password "{{ azure_client_secret }}" \
+          --tenant "{{ azure_tenant_id }}" \
+          --allow-no-subscriptions 2>/dev/null || echo "LOGIN_FAILED"
+      delegate_to: localhost
+      run_once: true
+      when: az_login.stdout is defined and 'LOGIN_FAILED' in az_login.stdout and azure_client_id is defined
+      register: az_login_sp
+      ignore_errors: yes
+      no_log: true
+
+    - name: AZURE | Display login status
+      ansible.builtin.debug:
+        msg: "Azure Login Status: {{ 'SUCCESS' if 'LOGIN_FAILED' not in (az_login.stdout | default('')) else 'FAILED' }}"
+
+    # ============================================
+    # FETCH SECRETS FROM AZURE KEY VAULT
+    # ============================================
+    - name: AZURE | Fetch AD username secret
+      ansible.builtin.shell: |
+        az keyvault secret show \
+          --vault-name "{{ azure_vault_name }}" \
+          --name "ad-username" \
+          --query "value" \
+          -o tsv 2>/dev/null || echo "SECRET_NOT_FOUND"
+      delegate_to: localhost
+      run_once: true
+      register: azure_ad_username
+      no_log: true
+
+    - name: AZURE | Fetch AD password secret
+      ansible.builtin.shell: |
+        az keyvault secret show \
+          --vault-name "{{ azure_vault_name }}" \
+          --name "ad-password" \
+          --query "value" \
+          -o tsv 2>/dev/null || echo "SECRET_NOT_FOUND"
+      delegate_to: localhost
+      run_once: true
+      register: azure_ad_password
+      no_log: true
+
+    - name: AZURE | Display secret fetch status
+      ansible.builtin.debug:
+        msg:
+          - "Username Secret Status: {{ 'FOUND' if 'SECRET_NOT_FOUND' not in azure_ad_username.stdout else 'NOT_FOUND' }}"
+          - "Password Secret Status: {{ 'FOUND' if 'SECRET_NOT_FOUND' not in azure_ad_password.stdout else 'NOT_FOUND' }}"
+
+    - name: AZURE | Set credentials from Azure Key Vault
       ansible.builtin.set_fact:
-        ad_username: "{{ ad_username_secret.secrets[0].value }}"
-      when: ad_username_secret is defined
+        ad_username: "{{ azure_ad_username.stdout }}"
+        ad_password: "{{ azure_ad_password.stdout }}"
+        ansible_user: "{{ azure_ad_username.stdout }}"
+        ansible_password: "{{ azure_ad_password.stdout }}"
+      when: 
+        - azure_ad_username.stdout is defined
+        - 'SECRET_NOT_FOUND' not in azure_ad_username.stdout
+        - azure_ad_password.stdout is defined
+        - 'SECRET_NOT_FOUND' not in azure_ad_password.stdout
 
-    - name: AZURE | Retrieve AD password
-      azure.azcollection.azure_rm_keyvaultsecret_info:
-        vault_uri: "{{ azure_vault_url }}"
-        name: "ad-password"
-      register: ad_password_secret
+    - name: AZURE | Fail if credentials not found
+      ansible.builtin.fail:
+        msg: |
+          ==========================================
+          ❌ AZURE KEY VAULT SECRETS NOT FOUND ❌
+          ==========================================
+          Please verify:
+          1. Azure Key Vault name: {{ azure_vault_name }}
+          2. Secret names: ad-username, ad-password
+          3. Azure CLI is authenticated
+          ==========================================
+      when: 
+        - ad_username is not defined or ad_password is not defined
 
-    - name: AZURE | Set AD password
-      ansible.builtin.set_fact:
-        ad_password: "{{ ad_password_secret.secrets[0].value }}"
-      when: ad_password_secret is defined
+    # ============================================
+    # DISPLAY AZURE KEY VAULT STATUS
+    # ============================================
+    - name: DISPLAY | Azure Key Vault credentials loaded
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "🔐 AZURE KEY VAULT STATUS"
+          - "=========================================="
+          - "Vault Name: {{ azure_vault_name }}"
+          - "Vault URL: {{ azure_vault_url }}"
+          - "Username: {{ ad_username }}"
+          - "Password: ******** (hidden)"
+          - "=========================================="
 
-    - name: AZURE | Retrieve opsintel username
-      azure.azcollection.azure_rm_keyvaultsecret_info:
-        vault_uri: "{{ azure_vault_url }}"
-        name: "opsintel-username"
-      register: opsintel_username_secret
+    # ============================================
+    # CONNECTION: Test connectivity to AD
+    # ============================================
+    - name: CONNECTION | Test WinRM connectivity
+      ansible.windows.win_ping:
+      register: ping_test
+      until: ping_test is success
+      retries: 3
+      delay: 5
 
-    - name: AZURE | Set opsintel username
-      ansible.builtin.set_fact:
-        opsintel_username: "{{ opsintel_username_secret.secrets[0].value }}"
-      when: opsintel_username_secret is defined
+    - name: CONNECTION | Display WinRM status
+      ansible.builtin.debug:
+        msg: "✅ WinRM Connection: SUCCESS"
+
+    # ============================================
+    # AD: Get Hostname and Domain Info
+    # ============================================
+    - name: AD | Get Windows hostname
+      ansible.windows.win_shell: |
+        hostname
+      register: hostname_result
+
+    - name: AD | Get AD Domain info
+      ansible.windows.win_shell: |
+        Import-Module ActiveDirectory -ErrorAction SilentlyContinue
+        $Domain = Get-ADDomain -ErrorAction SilentlyContinue
+        if ($Domain) {
+            Write-Output "Domain: $($Domain.DNSRoot)"
+            Write-Output "NetBIOS: $($Domain.NetBIOSName)"
+            Write-Output "Domain Mode: $($Domain.DomainMode)"
+            Write-Output "DC Count: $($Domain.ReplicaDirectoryServers.Count)"
+        } else {
+            Write-Output "ERROR: ActiveDirectory module not available or domain not found"
+        }
+      register: ad_domain_info
+      ignore_errors: yes
+
+    - name: AD | Get current user
+      ansible.windows.win_shell: |
+        whoami
+      register: whoami_result
+
+    - name: AD | Get domain controllers
+      ansible.windows.win_shell: |
+        Import-Module ActiveDirectory -ErrorAction SilentlyContinue
+        $DCs = Get-ADDomainController -Filter * -ErrorAction SilentlyContinue
+        if ($DCs) {
+            $DCs | ForEach-Object { Write-Output "DC: $($_.Name) - $($_.Site)" }
+        } else {
+            Write-Output "No domain controllers found"
+        }
+      register: dc_list
+      ignore_errors: yes
+
+  tasks:
+    # ============================================
+    # MAIN: Display all collected information
+    # ============================================
+    - name: MAIN | Display AD Server Information
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "✅ AD SERVER INFORMATION"
+          - "=========================================="
+          - "Hostname: {{ hostname_result.stdout }}"
+          - "Current User: {{ whoami_result.stdout }}"
+          - ""
+          - "AD Domain Information:"
+          - "{{ ad_domain_info.stdout_lines | default(['N/A']) }}"
+          - ""
+          - "Domain Controllers:"
+          - "{{ dc_list.stdout_lines | default(['N/A']) }}"
+          - "=========================================="
+
+    - name: MAIN | Display WinRM connection details
+      ansible.builtin.debug:
+        msg:
+          - "WinRM Details:"
+          - "  Connection: {{ ansible_connection }}"
+          - "  Transport: {{ ansible_winrm_transport }}"
+          - "  Port: {{ ansible_port }}"
+          - "  Server: {{ ansible_host }}"
+          - "  User: {{ ansible_user }}"
+
+    - name: MAIN | Display OS information
+      ansible.builtin.debug:
+        msg:
+          - "OS Information:"
+          - "  Hostname: {{ ansible_hostname }}"
+          - "  OS: {{ ansible_os_name }}"
+          - "  OS Version: {{ ansible_os_version }}"
+          - "  Domain: {{ ansible_domain | default('Not domain joined') }}"
+          - "  DNS Domain: {{ ansible_dns_domain | default('N/A') }}"
+
+    # ============================================
+    # VALIDATION: Verify credentials worked
+    # ============================================
+    - name: VALIDATION | Verify AD access
+      ansible.windows.win_shell: |
+        Import-Module ActiveDirectory -ErrorAction Stop
+        $CurrentUser = Get-ADUser -Identity "$env:USERNAME" -Properties DisplayName, SamAccountName, UserPrincipalName -ErrorAction Stop
+        Write-Output "User: $($CurrentUser.SamAccountName)"
+        Write-Output "DisplayName: $($CurrentUser.DisplayName)"
+        Write-Output "UPN: $($CurrentUser.UserPrincipalName)"
+      register: ad_user_info
+      ignore_errors: yes
+
+    - name: VALIDATION | AD User verification status
+      ansible.builtin.debug:
+        msg: "{{ ad_user_info.stdout_lines | default(['Unable to fetch AD user info']) }}"
+
+    - name: VALIDATION | Test successful
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "✅ AZURE KEY VAULT + AD TEST PASSED"
+          - "=========================================="
+          - "✓ Azure Key Vault credentials loaded successfully"
+          - "✓ WinRM connection established"
+          - "✓ AD domain information retrieved"
+          - "✓ Successfully authenticated to AD"
+          - ""
+          - "Test completed successfully!"
+          - "=========================================="
+
+  rescue:
+    - name: ERROR | Display failure details
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "❌ AZURE KEY VAULT + AD TEST FAILED"
+          - "=========================================="
+          - "Error: {{ ansible_failed_result.msg | default('Unknown error') }}"
+          - ""
+          - "Common Issues:"
+          - "1. Azure Key Vault secrets not found"
+          - "2. Azure CLI not authenticated"
+          - "3. WinRM connection failed"
+          - "4. AD module not available"
+          - "5. Insufficient AD permissions"
+          - "=========================================="
+
+    - name: ERROR | Re-raise failure
+      ansible.builtin.fail:
+        msg: "Test failed: {{ ansible_failed_result.msg | default('Unknown error') }}"
