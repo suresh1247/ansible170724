@@ -94,9 +94,9 @@
         ansible_password: "{{ azure_ad_password.stdout }}"
       when: 
         - azure_ad_username.stdout is defined
-        - 'SECRET_NOT_FOUND' not in azure_ad_username.stdout
+        - '"SECRET_NOT_FOUND" not in azure_ad_username.stdout'
         - azure_ad_password.stdout is defined
-        - 'SECRET_NOT_FOUND' not in azure_ad_password.stdout
+        - '"SECRET_NOT_FOUND" not in azure_ad_password.stdout'
 
     - name: AZURE | Fail if credentials not found
       ansible.builtin.fail:
