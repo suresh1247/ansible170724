@@ -39,10 +39,13 @@
     ansible_port: 5985
     ansible_winrm_operation_timeout_sec: 60
     ansible_winrm_read_timeout_sec: 120
+    
+    # Windows become settings - DO NOT set become at play level
+    # This will be handled by the module_utils or winrm connection
 
   pre_tasks:
     # ============================================
-    # FIX #1: Approval Logic - Hard Stop
+    # SAFETY: Require explicit approval before making AD changes
     # ============================================
     - name: SAFETY | Require explicit approval before making AD changes
       ansible.builtin.assert:
@@ -112,7 +115,7 @@
       no_log: true
 
     # ============================================
-    # FIX #2: Server-not-found - Hard Fail
+    # SERVER: Check existence - Hard fail if not found
     # ============================================
     - name: SERVER | Search for server in Active Directory
       ansible.windows.win_shell: |
@@ -186,7 +189,7 @@
     - name: MAIN | Execute AD onboarding
       block:
         # ============================================
-        # FIX #9: OU Management with SearchBase
+        # OU MANAGEMENT with SearchBase
         # ============================================
         - name: OU | Ensure LKM OU exists
           ansible.windows.win_shell: |
@@ -279,7 +282,7 @@
           changed_when: server_move.stdout == "MOVED"
 
         # ============================================
-        # FIX #9: GROUP Management with SearchBase
+        # GROUP MANAGEMENT with SearchBase
         # ============================================
         - name: GROUP | Ensure PAM Groups OU exists
           ansible.windows.win_shell: |
@@ -376,7 +379,7 @@
           changed_when: gpo_link_result.stdout == "LINKED"
 
         # ============================================
-        # FIX #10: Restricted Groups with PAM Group
+        # RESTRICTED GROUPS with PAM Group
         # ============================================
         - name: RESTRICTED | Backup GPO before modification
           ansible.windows.win_shell: |
@@ -397,7 +400,6 @@
           ansible.windows.win_shell: |
             $GPOName = "{{ gpo_name }}"
             $DomainName = "{{ domain_name }}"
-            # FIX #10: Use PAM group instead of direct user
             $GroupToAdd = "{{ ad_group_name }}"
             
             Import-Module GroupPolicy -ErrorAction Stop
@@ -473,7 +475,7 @@
           changed_when: false
 
         # ============================================
-        # FIX #11: gpupdate on target server
+        # GPO REFRESH on target server
         # ============================================
         - name: GPO | Trigger policy refresh on target server
           ansible.windows.win_shell: |
