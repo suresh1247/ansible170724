@@ -48,38 +48,46 @@
   when: server_type == "SQL" and not enable_dry_run
   register: sql_ou_status
 
-- name: OU | Check and Create Application OU
+- name: OU | Check if Application OU exists
   ansible.windows.win_shell: |
     Import-Module ActiveDirectory -ErrorAction Stop
-    $BaseDN = "{{ ou_base_dn }}"
     $App = Get-ADOrganizationalUnit -Filter "Name -eq '{{ application_name }}'" -ErrorAction SilentlyContinue
     if ($App) {
         Write-Output "EXISTS"
     } else {
-        $ParentPath = if ("{{ server_type }}" -eq "SQL") {
-            "OU=SQL,OU=Servers,OU=LKM,$BaseDN"
-        } else {
-            "OU=Servers,OU=LKM,$BaseDN"
-        }
-        New-ADOrganizationalUnit -Name "{{ application_name }}" -Path $ParentPath -Description "OU for {{ application_name }} application servers"
-        Write-Output "CREATED"
+        Write-Output "NOT_FOUND"
     }
   when: not enable_dry_run
-  register: app_ou_status
+  register: app_ou_check
 
-- name: OU | Wait for OU replication if created
+- name: OU | Create Application OU
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $BaseDN = "{{ ou_base_dn }}"
+    $ParentPath = if ("{{ server_type }}" -eq "SQL") {
+        "OU=SQL,OU=Servers,OU=LKM,$BaseDN"
+    } else {
+        "OU=Servers,OU=LKM,$BaseDN"
+    }
+    New-ADOrganizationalUnit -Name "{{ application_name }}" -Path $ParentPath -Description "OU for {{ application_name }} application servers"
+    Write-Output "CREATED"
+  when: app_ou_check.stdout == "NOT_FOUND" and not enable_dry_run
+  register: ou_creation
+
+- name: OU | Wait for OU replication
   ansible.windows.win_shell: Start-Sleep -Seconds 3
   when: 
+    - ou_creation is defined
+    - ou_creation.stdout is defined
+    - ou_creation.stdout == "CREATED"
     - not enable_dry_run
-    - app_ou_status.stdout is defined
-    - app_ou_status.stdout == "CREATED"
 
 - name: OU | Set facts for OU status
   ansible.builtin.set_fact:
     lkm_ou_result: "{{ lkm_ou_status.stdout | default('EXISTS') }}"
     servers_ou_result: "{{ servers_ou_status.stdout | default('EXISTS') }}"
     sql_ou_result: "{{ sql_ou_status.stdout | default('SKIPPED') }}"
-    app_ou_result: "{{ app_ou_status.stdout | default('EXISTS') }}"
+    app_ou_result: "{{ 'CREATED' if ou_creation is defined and ou_creation.stdout == 'CREATED' else app_ou_check.stdout | default('EXISTS') }}"
 
 - name: OU | Display OU creation status
   ansible.builtin.debug:
@@ -87,5 +95,5 @@
       - "LKM OU: {{ lkm_ou_result }}"
       - "Servers OU: {{ servers_ou_result }}"
       - "SQL OU: {{ sql_ou_result }}"
-      - "Application OU: {{ app_ou_result }}"
+      - "Application OU Result: {{ app_ou_result }}"
   when: not enable_dry_run
