@@ -380,7 +380,7 @@
           changed_when: gpo_link_result.stdout == "LINKED"
 
         # ============================================
-        # RESTRICTED GROUPS - WORKING METHOD
+        # RESTRICTED GROUPS - Using win_copy to avoid YAML issues
         # ============================================
         - name: RESTRICTED | Backup GPO before modification
           ansible.windows.win_shell: |
@@ -397,72 +397,76 @@
           no_log: true
           changed_when: gpo_backup.stdout == "BACKUP_CREATED"
 
-        - name: RESTRICTED | Create and apply Restricted Groups using PowerShell
+        - name: RESTRICTED | Create PowerShell script for Restricted Groups
+          ansible.windows.win_copy:
+            dest: "C:\\Windows\\Temp\\ConfigureRestrictedGroup.ps1"
+            content: |
+              param($GPOName, $DomainName, $GroupToAdd, $OperationId)
+              
+              Import-Module GroupPolicy -ErrorAction Stop
+              
+              $GPO = Get-GPO -Name $GPOName
+              $GPOId = $GPO.Id.ToString()
+              
+              $SecEditPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\Machine\Microsoft\Windows NT\SecEdit"
+              if (-not (Test-Path $SecEditPath)) {
+                  New-Item -Path $SecEditPath -ItemType Directory -Force
+              }
+              
+              $GptTmplPath = Join-Path $SecEditPath "GptTmpl.inf"
+              
+              $alreadyConfigured = $false
+              if (Test-Path $GptTmplPath) {
+                  $ExistingContent = Get-Content $GptTmplPath -Raw
+                  if ($ExistingContent -match "Administrators__Members.*$GroupToAdd") {
+                      $alreadyConfigured = $true
+                      Write-Output "ALREADY_CONFIGURED"
+                  }
+              }
+              
+              if (-not $alreadyConfigured) {
+                  $TemplateContent = @'
+          [Unicode]
+          Unicode=yes
+          [Version]
+          signature="$CHICAGO$"
+          Revision=1
+          [Group Membership]
+          Administrators__Members = $GroupToAdd
+          Administrators__MemberOf = 
+          '@
+                  
+                  $TemplateContent | Set-Content -Path $GptTmplPath -Force -Encoding ASCII
+                  
+                  $GptIniPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\GPT.INI"
+                  if (Test-Path $GptIniPath) {
+                      $GptIni = Get-Content $GptIniPath -Raw
+                      if ($GptIni -match "Version=(\d+)") {
+                          $CurrentVersion = [int]$matches[1]
+                          $NewVersion = $CurrentVersion + 1
+                          $GptIni = $GptIni -replace "Version=$CurrentVersion", "Version=$NewVersion"
+                          $GptIni | Set-Content $GptIniPath -Force
+                      }
+                  }
+                  
+                  Write-Output "CONFIGURED"
+              }
+          when: not enable_dry_run | bool
+
+        - name: RESTRICTED | Execute Restricted Groups configuration
           ansible.windows.win_shell: |
-            $GPOName = "{{ gpo_name }}"
-            $DomainName = "{{ domain_name }}"
-            $GroupToAdd = "{{ ad_group_name }}"
-            
-            # Import required module
-            Import-Module GroupPolicy -ErrorAction Stop
-            
-            # Get GPO and its ID
-            $GPO = Get-GPO -Name $GPOName
-            $GPOId = $GPO.Id.ToString()
-            
-            # Define the security template content
-            $TemplateContent = @"
-[Unicode]
-Unicode=yes
-[Version]
-signature="`$CHICAGO$`"
-Revision=1
-[Group Membership]
-Administrators__Members = $GroupToAdd
-Administrators__MemberOf = 
-"@
-            
-            # Path to the GPO's security template
-            $SecEditPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\Machine\Microsoft\Windows NT\SecEdit"
-            if (-not (Test-Path $SecEditPath)) {
-                New-Item -Path $SecEditPath -ItemType Directory -Force
-            }
-            
-            $GptTmplPath = Join-Path $SecEditPath "GptTmpl.inf"
-            
-            # Check if already configured
-            $alreadyConfigured = $false
-            if (Test-Path $GptTmplPath) {
-                $ExistingContent = Get-Content $GptTmplPath -Raw
-                if ($ExistingContent -match "Administrators__Members.*$GroupToAdd") {
-                    $alreadyConfigured = $true
-                    Write-Output "ALREADY_CONFIGURED"
-                }
-            }
-            
-            if (-not $alreadyConfigured) {
-                # Write the template content to GptTmpl.inf
-                $TemplateContent | Set-Content -Path $GptTmplPath -Force -Encoding ASCII
-                
-                # Update GPO version
-                $GptIniPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\GPT.INI"
-                if (Test-Path $GptIniPath) {
-                    $GptIni = Get-Content $GptIniPath -Raw
-                    if ($GptIni -match "Version=(\d+)") {
-                        $CurrentVersion = [int]$matches[1]
-                        $NewVersion = $CurrentVersion + 1
-                        $GptIni = $GptIni -replace "Version=$CurrentVersion", "Version=$NewVersion"
-                        $GptIni | Set-Content $GptIniPath -Force
-                    }
-                }
-                
-                Write-Output "CONFIGURED"
-            }
+            powershell.exe -ExecutionPolicy Bypass -File "C:\Windows\Temp\ConfigureRestrictedGroup.ps1" -GPOName "{{ gpo_name }}" -DomainName "{{ domain_name }}" -GroupToAdd "{{ ad_group_name }}" -OperationId "{{ operation_id }}"
           run_once: true
           register: rg_result
           when: not enable_dry_run | bool
           no_log: true
           changed_when: rg_result.stdout == "CONFIGURED"
+
+        - name: RESTRICTED | Clean up script
+          ansible.windows.win_file:
+            path: "C:\\Windows\\Temp\\ConfigureRestrictedGroup.ps1"
+            state: absent
+          when: not enable_dry_run | bool
 
         - name: RESTRICTED | Verify Restricted Groups configuration
           ansible.windows.win_shell: |
