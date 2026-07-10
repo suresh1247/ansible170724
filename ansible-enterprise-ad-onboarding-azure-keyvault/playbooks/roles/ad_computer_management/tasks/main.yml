@@ -54,20 +54,6 @@
       ==========================================
   when: not server_exists | bool
 
-- name: SERVER | Set server type and target OU
-  ansible.builtin.set_fact:
-    server_type: "{{ 'SQL' if 'SQL' in server_name | upper else 'NON-SQL' }}"
-    target_ou_dn: >-
-      {{
-        ('OU=' + application_name + ',OU=SQL,OU=Servers,OU=LKM,' + ou_base_dn)
-        if ('SQL' in server_name | upper)
-        else ('OU=' + application_name + ',OU=Servers,OU=LKM,' + ou_base_dn)
-      }}
-    app_prefix: "{{ application_name[:3] | upper }}"
-    ad_group_name: "{{ application_name[:3] | upper }}-PAM-{{ application_name }}{{ 'SQL' if ('SQL' in server_name | upper) else '' }}"
-    gpo_name: "{{ application_name[:3] | upper }}-SRV-{{ application_name }}{{ 'SQL' if ('SQL' in server_name | upper) else '' }}"
-  when: server_exists | bool
-
 - name: COMPUTER | Verify target OU exists before moving
   ansible.windows.win_shell: |
     Import-Module ActiveDirectory -ErrorAction Stop
