@@ -38,12 +38,16 @@
   ansible.windows.win_shell: |
     Import-Module ActiveDirectory -ErrorAction Stop
     $BaseDN = "{{ ou_base_dn }}"
-    $SQL = Get-ADOrganizationalUnit -Filter "Name -eq 'SQL'" -SearchBase "OU=Servers,OU=LKM,$BaseDN" -ErrorAction SilentlyContinue
-    if (-not $SQL) {
-        New-ADOrganizationalUnit -Name "SQL" -Path "OU=Servers,OU=LKM,$BaseDN" -Description "Container for SQL server OUs"
-        Write-Output "CREATED"
+    if ("{{ server_type }}" -eq "SQL") {
+        $SQL = Get-ADOrganizationalUnit -Filter "Name -eq 'SQL'" -SearchBase "OU=Servers,OU=LKM,$BaseDN" -ErrorAction SilentlyContinue
+        if (-not $SQL) {
+            New-ADOrganizationalUnit -Name "SQL" -Path "OU=Servers,OU=LKM,$BaseDN" -Description "Container for SQL server OUs"
+            Write-Output "CREATED"
+        } else {
+            Write-Output "EXISTS"
+        }
     } else {
-        Write-Output "EXISTS"
+        Write-Output "SKIPPED"
     }
   run_once: true
   register: sql_ou_result
