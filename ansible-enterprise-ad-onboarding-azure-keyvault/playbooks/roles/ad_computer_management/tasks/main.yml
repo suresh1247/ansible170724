@@ -68,6 +68,27 @@
     gpo_name: "{{ application_name[:3] | upper }}-SRV-{{ application_name }}{{ 'SQL' if ('SQL' in server_name | upper) else '' }}"
   when: server_exists | bool
 
+- name: COMPUTER | Verify target OU exists before moving
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $TargetOU = "{{ target_ou_dn }}"
+    $OUExists = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$TargetOU'" -ErrorAction SilentlyContinue
+    if ($OUExists) {
+        Write-Output "OU_EXISTS"
+    } else {
+        Write-Output "OU_NOT_FOUND"
+    }
+  run_once: true
+  register: ou_check
+  when: server_exists and not enable_dry_run | bool
+
+- name: COMPUTER | Fail if target OU does not exist
+  ansible.builtin.fail:
+    msg: "Target OU '{{ target_ou_dn }}' does not exist. Please ensure OU is created before moving server."
+  when: 
+    - server_exists and not enable_dry_run | bool
+    - ou_check.stdout == "OU_NOT_FOUND"
+
 - name: COMPUTER | Get current server location
   ansible.windows.win_shell: |
     Import-Module ActiveDirectory -ErrorAction Stop
