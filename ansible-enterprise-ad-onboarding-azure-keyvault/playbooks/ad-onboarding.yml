@@ -351,7 +351,7 @@
           changed_when: opsintel_result.stdout == "ADDED"
 
         # ============================================
-        # GPO MANAGEMENT
+        # GPO MANAGEMENT (Using win_shell)
         # ============================================
         - name: GPO | Ensure GPO exists
           ansible.windows.win_shell: |
@@ -388,7 +388,7 @@
           changed_when: gpo_link_result.stdout == "LINKED"
 
         # ============================================
-        # RESTRICTED GROUPS - FIXED VERSION
+        # RESTRICTED GROUPS - Working Method
         # ============================================
         - name: RESTRICTED | Backup GPO before modification
           ansible.windows.win_shell: |
@@ -405,7 +405,7 @@
           no_log: true
           changed_when: gpo_backup.stdout == "BACKUP_CREATED"
 
-        - name: RESTRICTED | Create security template file
+        - name: RESTRICTED | Create security template for Restricted Groups
           ansible.windows.win_copy:
             dest: "C:\\Windows\\Temp\\sec_template_{{ operation_id }}.inf"
             content: |
@@ -418,7 +418,7 @@
               Administrators__Members = {{ domain_name }}\opsintel
           when: not enable_dry_run | bool
 
-        - name: RESTRICTED | Apply Restricted Groups to GPO using secedit
+        - name: RESTRICTED | Apply Restricted Groups to GPO
           ansible.windows.win_shell: |
             $GPOName = "{{ gpo_name }}"
             $DomainName = "{{ domain_name }}"
@@ -433,7 +433,7 @@
                 New-Item -Path $GptTmplDir -ItemType Directory -Force
             }
             
-            # Check if already configured
+            # Read existing content
             $Content = ""
             if (Test-Path $GptTmplPath) {
                 $Content = Get-Content $GptTmplPath -Raw
@@ -442,29 +442,33 @@
             # Read template content
             $TemplateContent = Get-Content $TemplatePath -Raw
             
-            # Merge or replace the Group Membership section
-            if ($Content -match "\[Group Membership\]") {
-                $NewContent = $Content -replace "(?s)\[Group Membership\].*?(\n\[|\Z)", "`n$TemplateContent`n`n"
+            # Check if already configured
+            if ($Content -match "Administrators__Members.*opsintel") {
+                Write-Output "ALREADY_CONFIGURED"
             } else {
-                $NewContent = $Content + "`n" + $TemplateContent
-            }
-            
-            # Save the updated GptTmpl.inf
-            $NewContent | Set-Content -Path $GptTmplPath -Force -Encoding ASCII
-            
-            # Update GPO version to force refresh
-            $GptIniPath = "C:\\Windows\\SYSVOL\\sysvol\\$DomainName\\Policies\\{$GPOId}\\GPT.INI"
-            if (Test-Path $GptIniPath) {
-                $GptIni = Get-Content $GptIniPath -Raw
-                if ($GptIni -match "Version=(\d+)") {
-                    $CurrentVersion = [int]$matches[1]
-                    $NewVersion = $CurrentVersion + 1
-                    $GptIni = $GptIni -replace "Version=$CurrentVersion", "Version=$NewVersion"
-                    $GptIni | Set-Content $GptIniPath -Force
+                # Merge or replace the Group Membership section
+                if ($Content -match "\[Group Membership\]") {
+                    $NewContent = $Content -replace "(?s)\[Group Membership\].*?(\n\[|\Z)", "`n$TemplateContent`n`n"
+                } else {
+                    $NewContent = $Content + "`n" + $TemplateContent
                 }
+                
+                # Save the updated GptTmpl.inf
+                $NewContent | Set-Content -Path $GptTmplPath -Force -Encoding ASCII
+                
+                # Update GPO version to force refresh
+                $GptIniPath = "C:\\Windows\\SYSVOL\\sysvol\\$DomainName\\Policies\\{$GPOId}\\GPT.INI"
+                if (Test-Path $GptIniPath) {
+                    $GptIni = Get-Content $GptIniPath -Raw
+                    if ($GptIni -match "Version=(\d+)") {
+                        $CurrentVersion = [int]$matches[1]
+                        $NewVersion = $CurrentVersion + 1
+                        $GptIni = $GptIni -replace "Version=$CurrentVersion", "Version=$NewVersion"
+                        $GptIni | Set-Content $GptIniPath -Force
+                    }
+                }
+                Write-Output "CONFIGURED"
             }
-            
-            Write-Output "CONFIGURED"
           run_once: true
           register: rg_result
           when: not enable_dry_run | bool
@@ -516,27 +520,11 @@
           ansible.windows.win_shell: |
             $ServerName = "{{ server_name }}"
             try {
-                # Try using Invoke-GPUpdate
                 Invoke-GPUpdate -Computer $ServerName -RandomDelayInMinutes 0 -Force -ErrorAction Stop
                 Write-Output "GPUPDATE_INITIATED"
             }
             catch {
-                # Fallback: Use scheduled task
-                try {
-                    $TaskName = "GPUpdate_$([Guid]::NewGuid().ToString().Substring(0,8))"
-                    $Command = "gpupdate /force /target:computer"
-                    $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-Command `"$Command`""
-                    $Trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1)
-                    $Principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount
-                    $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-                    Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -ComputerName $ServerName -ErrorAction Stop
-                    Start-Sleep -Seconds 2
-                    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ComputerName $ServerName
-                    Write-Output "GPUPDATE_SCHEDULED"
-                }
-                catch {
-                    Write-Output "GPUPDATE_FAILED: $($_.Exception.Message)"
-                }
+                Write-Output "GPUPDATE_FAILED: $($_.Exception.Message)"
             }
           run_once: true
           register: gpupdate_result
