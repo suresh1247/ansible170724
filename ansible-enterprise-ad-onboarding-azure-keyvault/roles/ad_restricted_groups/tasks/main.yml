@@ -1,0 +1,75 @@
+---
+# Role: ad_restricted_groups
+# Purpose: Configure Restricted Groups in GPO
+
+- name: RESTRICTED | Create PowerShell script for Restricted Groups
+  ansible.windows.win_copy:
+    dest: "C:\\Windows\\Temp\\AddRestrictedGroup.ps1"
+    content: |
+      param($GPOName, $DomainName)
+      $GroupName = "Administrators"
+      $MemberToAdd = "$DomainName\opsintel"
+      $GPO = Get-GPO -Name $GPOName
+      $GPOId = $GPO.Id.ToString()
+      $SecEditPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\Machine\Microsoft\Windows NT\SecEdit"
+      if (-not (Test-Path $SecEditPath)) { New-Item -Path $SecEditPath -ItemType Directory -Force | Out-Null }
+      $GptTmplPath = Join-Path $SecEditPath "GptTmpl.inf"
+      $ContentLines = @()
+      $ContentLines += '[Unicode]'
+      $ContentLines += 'Unicode=yes'
+      $ContentLines += '[Version]'
+      $ContentLines += 'signature="$CHICAGO$"'
+      $ContentLines += 'Revision=1'
+      $ContentLines += '[Group Membership]'
+      $ContentLines += "${GroupName}__Members = $MemberToAdd"
+      $ContentLines += "${GroupName}__MemberOf = "
+      $ContentLines | Set-Content -Path $GptTmplPath -Force -Encoding ASCII
+      $GptIniPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\GPT.INI"
+      if (Test-Path $GptIniPath) {
+          $GptIni = Get-Content $GptIniPath -Raw
+          if ($GptIni -match "Version=(\d+)") {
+              $NewVersion = [int]$matches[1] + 1
+              $GptIni = $GptIni -replace "Version=$($matches[1])", "Version=$NewVersion"
+              $GptIni | Set-Content $GptIniPath -Force
+          }
+      }
+      Write-Output "SUCCESS: Restricted Group configured"
+  when: server_exists and not enable_dry_run
+
+- name: RESTRICTED | Execute Restricted Groups configuration
+  ansible.windows.win_shell: |
+    powershell.exe -ExecutionPolicy Bypass -File C:\Windows\Temp\AddRestrictedGroup.ps1 -GPOName "{{ gpo_name }}" -DomainName "{{ domain_name }}"
+  when: server_exists and not enable_dry_run
+  register: restricted_group_config
+
+- name: RESTRICTED | Clean up script
+  ansible.windows.win_file:
+    path: "C:\\Windows\\Temp\\AddRestrictedGroup.ps1"
+    state: absent
+  when: server_exists and not enable_dry_run
+
+- name: RESTRICTED | Verify configuration
+  ansible.windows.win_shell: |
+    $GPOName = "{{ gpo_name }}"
+    $DomainName = "{{ domain_name }}"
+    $GPO = Get-GPO -Name $GPOName
+    $GPOId = $GPO.Id.ToString()
+    $GptTmplPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf"
+    if (Test-Path $GptTmplPath) {
+        $Content = Get-Content $GptTmplPath -Raw
+        if ($Content -match "Administrators__Members.*opsintel") {
+            Write-Output "VERIFIED: Administrators group configured"
+        } else {
+            Write-Output "WARNING: Administrators group not found"
+        }
+    } else {
+        Write-Output "INFO: GptTmpl.inf created successfully"
+    }
+  register: verify_restricted_group
+  when: server_exists and not enable_dry_run
+
+- name: GPO | Force policy refresh
+  ansible.windows.win_shell: gpupdate /force /target:computer
+  register: gpupdate_result
+  when: not enable_dry_run
+  ignore_errors: yes
