@@ -3,45 +3,71 @@
 # Purpose: Create OU hierarchy with SearchBase for scope
 
 - name: OU | Ensure LKM OU exists
-  microsoft.ad.ou:
-    name: LKM
-    path: "{{ ou_base_dn }}"
-    description: "LKM Root OU for server management"
-    state: present
-    scope: one_level
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $BaseDN = "{{ ou_base_dn }}"
+    $LKM = Get-ADOrganizationalUnit -Filter "Name -eq 'LKM'" -SearchBase $BaseDN -ErrorAction SilentlyContinue
+    if (-not $LKM) {
+        New-ADOrganizationalUnit -Name "LKM" -Path $BaseDN -Description "LKM Root OU for server management"
+        Write-Output "CREATED"
+    } else {
+        Write-Output "EXISTS"
+    }
   run_once: true
   register: lkm_ou_result
   when: not enable_dry_run | bool
+  changed_when: lkm_ou_result.stdout == "CREATED"
 
 - name: OU | Ensure Servers OU exists
-  microsoft.ad.ou:
-    name: Servers
-    path: "OU=LKM,{{ ou_base_dn }}"
-    description: "Container for all server OUs"
-    state: present
-    scope: one_level
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $BaseDN = "{{ ou_base_dn }}"
+    $Servers = Get-ADOrganizationalUnit -Filter "Name -eq 'Servers'" -SearchBase "OU=LKM,$BaseDN" -ErrorAction SilentlyContinue
+    if (-not $Servers) {
+        New-ADOrganizationalUnit -Name "Servers" -Path "OU=LKM,$BaseDN" -Description "Container for all server OUs"
+        Write-Output "CREATED"
+    } else {
+        Write-Output "EXISTS"
+    }
   run_once: true
   register: servers_ou_result
   when: not enable_dry_run | bool
+  changed_when: servers_ou_result.stdout == "CREATED"
 
 - name: OU | Ensure SQL OU exists if needed
-  microsoft.ad.ou:
-    name: SQL
-    path: "OU=Servers,OU=LKM,{{ ou_base_dn }}"
-    description: "Container for SQL server OUs"
-    state: present
-    scope: one_level
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $BaseDN = "{{ ou_base_dn }}"
+    if ("{{ server_type }}" -eq "SQL") {
+        $SQL = Get-ADOrganizationalUnit -Filter "Name -eq 'SQL'" -SearchBase "OU=Servers,OU=LKM,$BaseDN" -ErrorAction SilentlyContinue
+        if (-not $SQL) {
+            New-ADOrganizationalUnit -Name "SQL" -Path "OU=Servers,OU=LKM,$BaseDN" -Description "Container for SQL server OUs"
+            Write-Output "CREATED"
+        } else {
+            Write-Output "EXISTS"
+        }
+    } else {
+        Write-Output "SKIPPED"
+    }
   run_once: true
   register: sql_ou_result
-  when: server_type == "SQL" and not enable_dry_run | bool
+  when: not enable_dry_run | bool
+  changed_when: sql_ou_result.stdout == "CREATED"
 
-- name: OU | Ensure Application OU exists
-  microsoft.ad.ou:
-    name: "{{ application_name }}"
-    path: "{{ 'OU=SQL,OU=Servers,OU=LKM' if server_type == 'SQL' else 'OU=Servers,OU=LKM' }},{{ ou_base_dn }}"
-    description: "OU for {{ application_name }} application servers"
-    state: present
-    scope: one_level
+- name: OU | Ensure Application OU exists with SearchBase
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $BaseDN = "{{ ou_base_dn }}"
+    $ParentPath = "{{ 'OU=SQL,OU=Servers,OU=LKM' if server_type == 'SQL' else 'OU=Servers,OU=LKM' }}"
+    $SearchBase = "$ParentPath,$BaseDN"
+    $AppOU = Get-ADOrganizationalUnit -Filter "Name -eq '{{ application_name }}'" -SearchBase $SearchBase -ErrorAction SilentlyContinue
+    if (-not $AppOU) {
+        New-ADOrganizationalUnit -Name "{{ application_name }}" -Path $SearchBase -Description "OU for {{ application_name }} application servers"
+        Write-Output "CREATED"
+    } else {
+        Write-Output "EXISTS"
+    }
   run_once: true
   register: app_ou_result
   when: not enable_dry_run | bool
+  changed_when: app_ou_result.stdout == "CREATED"
