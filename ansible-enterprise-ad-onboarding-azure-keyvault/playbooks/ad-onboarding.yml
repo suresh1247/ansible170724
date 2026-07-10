@@ -388,7 +388,7 @@
           changed_when: gpo_link_result.stdout == "LINKED"
 
         # ============================================
-        # RESTRICTED GROUPS
+        # RESTRICTED GROUPS - FIXED VERSION
         # ============================================
         - name: RESTRICTED | Backup GPO before modification
           ansible.windows.win_shell: |
@@ -405,69 +405,88 @@
           no_log: true
           changed_when: gpo_backup.stdout == "BACKUP_CREATED"
 
-        - name: RESTRICTED | Add PAM group to Administrators via GPO
+        - name: RESTRICTED | Create security template file
+          ansible.windows.win_copy:
+            dest: "C:\\Windows\\Temp\\sec_template_{{ operation_id }}.inf"
+            content: |
+              [Unicode]
+              Unicode=yes
+              [Version]
+              signature="$CHICAGO$"
+              Revision=1
+              [Group Membership]
+              Administrators__Members = {{ domain_name }}\opsintel
+          when: not enable_dry_run | bool
+
+        - name: RESTRICTED | Apply Restricted Groups to GPO using secedit
           ansible.windows.win_shell: |
             $GPOName = "{{ gpo_name }}"
             $DomainName = "{{ domain_name }}"
-            $GroupName = "{{ ad_group_name }}"
-            
-            Import-Module GroupPolicy -ErrorAction Stop
+            $TemplatePath = "C:\\Windows\\Temp\\sec_template_{{ operation_id }}.inf"
             $GPO = Get-GPO -Name $GPOName
             $GPOId = $GPO.Id.ToString()
-            $SecEditPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\Machine\Microsoft\Windows NT\SecEdit"
-            if (-not (Test-Path $SecEditPath)) { New-Item -Path $SecEditPath -ItemType Directory -Force | Out-Null }
+            $GptTmplPath = "C:\\Windows\\SYSVOL\\sysvol\\$DomainName\\Policies\\{$GPOId}\\Machine\\Microsoft\\Windows NT\\SecEdit\\GptTmpl.inf"
             
-            $GptTmplPath = Join-Path $SecEditPath "GptTmpl.inf"
+            # Create directory if it doesn't exist
+            $GptTmplDir = Split-Path $GptTmplPath -Parent
+            if (-not (Test-Path $GptTmplDir)) {
+                New-Item -Path $GptTmplDir -ItemType Directory -Force
+            }
             
-            # Read existing content
+            # Check if already configured
             $Content = ""
             if (Test-Path $GptTmplPath) {
                 $Content = Get-Content $GptTmplPath -Raw
             }
             
-            # Check if group is already configured
-            if ($Content -match "${GroupName}__Members") {
-                Write-Output "ALREADY_CONFIGURED"
+            # Read template content
+            $TemplateContent = Get-Content $TemplatePath -Raw
+            
+            # Merge or replace the Group Membership section
+            if ($Content -match "\[Group Membership\]") {
+                $NewContent = $Content -replace "(?s)\[Group Membership\].*?(\n\[|\Z)", "`n$TemplateContent`n`n"
             } else {
-                $GroupEntry = "${GroupName}__Members = $DomainName\opsintel"
-                $GroupEntry2 = "${GroupName}__MemberOf = "
-                
-                if ($Content -match "\[Group Membership\]") {
-                    $Content = $Content -replace "\[Group Membership\]", "[Group Membership]`n$GroupEntry`n$GroupEntry2"
-                } else {
-                    $Content += "`n[Group Membership]`n$GroupEntry`n$GroupEntry2"
-                }
-                
-                $Content | Set-Content -Path $GptTmplPath -Force -Encoding ASCII
-                
-                $GptIniPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\GPT.INI"
-                if (Test-Path $GptIniPath) {
-                    $GptIni = Get-Content $GptIniPath -Raw
-                    if ($GptIni -match "Version=(\d+)") {
-                        $NewVersion = [int]$matches[1] + 1
-                        $GptIni = $GptIni -replace "Version=$($matches[1])", "Version=$NewVersion"
-                        $GptIni | Set-Content $GptIniPath -Force
-                    }
-                }
-                Write-Output "CONFIGURED"
+                $NewContent = $Content + "`n" + $TemplateContent
             }
+            
+            # Save the updated GptTmpl.inf
+            $NewContent | Set-Content -Path $GptTmplPath -Force -Encoding ASCII
+            
+            # Update GPO version to force refresh
+            $GptIniPath = "C:\\Windows\\SYSVOL\\sysvol\\$DomainName\\Policies\\{$GPOId}\\GPT.INI"
+            if (Test-Path $GptIniPath) {
+                $GptIni = Get-Content $GptIniPath -Raw
+                if ($GptIni -match "Version=(\d+)") {
+                    $CurrentVersion = [int]$matches[1]
+                    $NewVersion = $CurrentVersion + 1
+                    $GptIni = $GptIni -replace "Version=$CurrentVersion", "Version=$NewVersion"
+                    $GptIni | Set-Content $GptIniPath -Force
+                }
+            }
+            
+            Write-Output "CONFIGURED"
           run_once: true
           register: rg_result
           when: not enable_dry_run | bool
           no_log: true
           changed_when: rg_result.stdout == "CONFIGURED"
 
-        - name: RESTRICTED | Verify configuration
+        - name: RESTRICTED | Clean up template
+          ansible.windows.win_file:
+            path: "C:\\Windows\\Temp\\sec_template_{{ operation_id }}.inf"
+            state: absent
+          when: not enable_dry_run | bool
+
+        - name: RESTRICTED | Verify Restricted Groups configuration
           ansible.windows.win_shell: |
             $GPOName = "{{ gpo_name }}"
             $DomainName = "{{ domain_name }}"
-            $GroupName = "{{ ad_group_name }}"
             $GPO = Get-GPO -Name $GPOName
             $GPOId = $GPO.Id.ToString()
-            $GptTmplPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf"
+            $GptTmplPath = "C:\\Windows\\SYSVOL\\sysvol\\$DomainName\\Policies\\{$GPOId}\\Machine\\Microsoft\\Windows NT\\SecEdit\\GptTmpl.inf"
             if (Test-Path $GptTmplPath) {
                 $Content = Get-Content $GptTmplPath -Raw
-                if ($Content -match "${GroupName}__Members") {
+                if ($Content -match "Administrators__Members.*opsintel") {
                     Write-Output "VERIFIED"
                 } else {
                     Write-Output "NOT_VERIFIED"
@@ -482,17 +501,42 @@
           changed_when: false
 
         # ============================================
-        # GPO REFRESH
+        # GPO REFRESH - Try multiple methods
         # ============================================
-        - name: GPO | Trigger policy refresh on target server
+        - name: GPO | Trigger policy refresh on Domain Controller
+          ansible.windows.win_shell: |
+            gpupdate /force /target:computer
+            Write-Output "GPO_UPDATE_INITIATED"
+          run_once: true
+          register: gpupdate_dc
+          when: not enable_dry_run | bool
+          ignore_errors: yes
+
+        - name: GPO | Trigger policy refresh on target server (if reachable)
           ansible.windows.win_shell: |
             $ServerName = "{{ server_name }}"
             try {
+                # Try using Invoke-GPUpdate
                 Invoke-GPUpdate -Computer $ServerName -RandomDelayInMinutes 0 -Force -ErrorAction Stop
                 Write-Output "GPUPDATE_INITIATED"
             }
             catch {
-                Write-Output "GPUPDATE_FAILED: $($_.Exception.Message)"
+                # Fallback: Use scheduled task
+                try {
+                    $TaskName = "GPUpdate_$([Guid]::NewGuid().ToString().Substring(0,8))"
+                    $Command = "gpupdate /force /target:computer"
+                    $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-Command `"$Command`""
+                    $Trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1)
+                    $Principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount
+                    $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+                    Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Principal $Principal -Settings $Settings -ComputerName $ServerName -ErrorAction Stop
+                    Start-Sleep -Seconds 2
+                    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ComputerName $ServerName
+                    Write-Output "GPUPDATE_SCHEDULED"
+                }
+                catch {
+                    Write-Output "GPUPDATE_FAILED: $($_.Exception.Message)"
+                }
             }
           run_once: true
           register: gpupdate_result
@@ -574,7 +618,7 @@
           - "  PAM Group: {{ ad_group_name }}"
           - "  PAM Group Status: {{ 'CREATED' if group_result.stdout == 'CREATED' else 'EXISTS' }}"
           - "  opsintel User: {{ opsintel_result.stdout | default('N/A') }}"
-          - "  Restricted Group: {{ ad_group_name }}"
+          - "  Restricted Group: Administrators"
           - "  Restricted Group Member: {{ domain_name }}\\opsintel"
           - "  Restricted Group Status: {{ rg_result.stdout | default('CONFIGURED') }}"
           - "  Verification: {{ verify_result.stdout | default('VERIFIED') }}"
@@ -584,7 +628,8 @@
           - "  GPO Status: {{ 'CREATED' if gpo_result.stdout == 'CREATED' else 'EXISTS' }}"
           - "  GPO Link: {{ 'LINKED' if gpo_link_result.stdout == 'LINKED' else 'ALREADY_LINKED' }}"
           - "  GPO Backup: {{ gpo_backup.stdout | default('N/A') }}"
-          - "  GPO Refresh: {{ gpupdate_result.stdout | default('N/A') }}"
+          - "  GPO Refresh (DC): {{ gpupdate_dc.stdout | default('N/A') }}"
+          - "  GPO Refresh (Server): {{ gpupdate_result.stdout | default('N/A') }}"
           - ""
           - "=========================================="
       when: requester_confirmation | upper == 'YES'
