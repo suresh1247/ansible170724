@@ -15,90 +15,27 @@
   register: gpo_backup
   when: not enable_dry_run | bool
   no_log: true
+  changed_when: gpo_backup.stdout == "BACKUP_CREATED"
 
-- name: RESTRICTED | Add PAM group to Administrators via GPO
+- name: RESTRICTED | Create and apply Restricted Groups
   ansible.windows.win_shell: |
-    $GPOName = "{{ gpo_name }}"
-    $DomainName = "{{ domain_name }}"
-    # Use the PAM group instead of direct user
-    $GroupToAdd = "{{ ad_group_name }}"
-    
-    Import-Module GroupPolicy -ErrorAction Stop
-    $GPO = Get-GPO -Name $GPOName
-    $GPOId = $GPO.Id.ToString()
-    $SecEditPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\Machine\Microsoft\Windows NT\SecEdit"
-    if (-not (Test-Path $SecEditPath)) { New-Item -Path $SecEditPath -ItemType Directory -Force | Out-Null }
-    
-    $GptTmplPath = Join-Path $SecEditPath "GptTmpl.inf"
-    
-    # Read existing content
-    $Content = ""
-    if (Test-Path $GptTmplPath) {
-        $Content = Get-Content $GptTmplPath -Raw
-    }
-    
-    # Check if group is already configured
-    if ($Content -match "Administrators__Members.*$GroupToAdd") {
-        Write-Output "ALREADY_CONFIGURED"
-    } else {
-        # Add PAM group to Administrators via Restricted Groups
-        $GroupEntry = "Administrators__Members = $GroupToAdd"
-        $GroupEntry2 = "Administrators__MemberOf = "
-        
-        # Remove any existing Administrators__Members entries to avoid duplication
-        if ($Content -match "Administrators__Members") {
-            $Content = $Content -replace "Administrators__Members = .*", $GroupEntry
-        } else {
-            if ($Content -match "\[Group Membership\]") {
-                $Content = $Content -replace "\[Group Membership\]", "[Group Membership]`n$GroupEntry`n$GroupEntry2"
-            } else {
-                $Content += "`n[Group Membership]`n$GroupEntry`n$GroupEntry2"
-            }
-        }
-        
-        $Content | Set-Content -Path $GptTmplPath -Force -Encoding ASCII
-        
-        # Update GPO version
-        $GptIniPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\GPT.INI"
-        if (Test-Path $GptIniPath) {
-            $GptIni = Get-Content $GptIniPath -Raw
-            if ($GptIni -match "Version=(\d+)") {
-                $NewVersion = [int]$matches[1] + 1
-                $GptIni = $GptIni -replace "Version=$($matches[1])", "Version=$NewVersion"
-                $GptIni | Set-Content $GptIniPath -Force
-            }
-        }
-        Write-Output "CONFIGURED"
-    }
+    $GPOName = "{{ gpo_name }}"; $DomainName = "{{ domain_name }}"; $GroupToAdd = "{{ ad_group_name }}"; Import-Module GroupPolicy -ErrorAction Stop; $GPO = Get-GPO -Name $GPOName; $GPOId = $GPO.Id.ToString(); $SecEditPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\Machine\Microsoft\Windows NT\SecEdit"; if (-not (Test-Path $SecEditPath)) { New-Item -Path $SecEditPath -ItemType Directory -Force }; $GptTmplPath = Join-Path $SecEditPath "GptTmpl.inf"; $alreadyConfigured = $false; if (Test-Path $GptTmplPath) { $ExistingContent = Get-Content $GptTmplPath -Raw; if ($ExistingContent -match "Administrators__Members.*$GroupToAdd") { $alreadyConfigured = $true } }; if (-not $alreadyConfigured) { $TemplateContent = '[Unicode]' + "`n" + 'Unicode=yes' + "`n" + '[Version]' + "`n" + 'signature="$CHICAGO$"' + "`n" + 'Revision=1' + "`n" + '[Group Membership]' + "`n" + "Administrators__Members = $GroupToAdd" + "`n" + "Administrators__MemberOf = "; $TemplateContent | Set-Content -Path $GptTmplPath -Force -Encoding ASCII; $GptIniPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\GPT.INI"; if (Test-Path $GptIniPath) { $GptIni = Get-Content $GptIniPath -Raw; if ($GptIni -match "Version=(\d+)") { $CurrentVersion = [int]$matches[1]; $NewVersion = $CurrentVersion + 1; $GptIni = $GptIni -replace "Version=$CurrentVersion", "Version=$NewVersion"; $GptIni | Set-Content $GptIniPath -Force } }; Write-Output "CONFIGURED" } else { Write-Output "ALREADY_CONFIGURED" }
   run_once: true
   register: rg_result
   when: not enable_dry_run | bool
   no_log: true
+  changed_when: rg_result.stdout == "CONFIGURED"
 
-- name: RESTRICTED | Verify configuration
+- name: RESTRICTED | Verify Restricted Groups configuration
   ansible.windows.win_shell: |
-    $GPOName = "{{ gpo_name }}"
-    $DomainName = "{{ domain_name }}"
-    $GroupToAdd = "{{ ad_group_name }}"
-    $GPO = Get-GPO -Name $GPOName
-    $GPOId = $GPO.Id.ToString()
-    $GptTmplPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf"
-    if (Test-Path $GptTmplPath) {
-        $Content = Get-Content $GptTmplPath -Raw
-        if ($Content -match "Administrators__Members.*$GroupToAdd") {
-            Write-Output "VERIFIED: PAM group added to Administrators"
-        } else {
-            Write-Output "WARNING: PAM group not found in Administrators"
-        }
-    } else {
-        Write-Output "INFO: GptTmpl.inf created successfully"
-    }
+    $GPOName = "{{ gpo_name }}"; $DomainName = "{{ domain_name }}"; $GroupToAdd = "{{ ad_group_name }}"; $GPO = Get-GPO -Name $GPOName; $GPOId = $GPO.Id.ToString(); $GptTmplPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf"; if (Test-Path $GptTmplPath) { $Content = Get-Content $GptTmplPath -Raw; if ($Content -match "Administrators__Members.*$GroupToAdd") { Write-Output "VERIFIED" } else { Write-Output "NOT_VERIFIED" } } else { Write-Output "FILE_NOT_FOUND" }
   run_once: true
   register: verify_result
   when: not enable_dry_run | bool
   no_log: true
+  changed_when: false
 
-- name: RESTRICTED | Trigger policy refresh on target server
+- name: GPO | Trigger policy refresh on target server
   ansible.windows.win_shell: |
     $ServerName = "{{ server_name }}"
     try {
@@ -112,3 +49,4 @@
   register: gpupdate_result
   when: not enable_dry_run | bool
   ignore_errors: yes
+  changed_when: false
