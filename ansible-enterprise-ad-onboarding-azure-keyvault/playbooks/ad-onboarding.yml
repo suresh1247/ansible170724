@@ -69,13 +69,16 @@
           ansible.builtin.include_role:
             name: ad_validation
 
-        - name: Include computer management role
-          ansible.builtin.include_role:
-            name: ad_computer_management
-
-        - name: Include OU management role
+        # ============================================
+        # CRITICAL: OU must be created BEFORE moving server
+        # ============================================
+        - name: Include OU management role (FIRST - Create target OU)
           ansible.builtin.include_role:
             name: ad_ou_management
+
+        - name: Include computer management role (SECOND - Move server to existing OU)
+          ansible.builtin.include_role:
+            name: ad_computer_management
 
         - name: Include group management role
           ansible.builtin.include_role:
