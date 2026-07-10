@@ -35,6 +35,8 @@
     ansible_password: "{{ ad_credentials.vault_ad_password }}"
     ansible_connection: winrm
     ansible_winrm_transport: ntlm
+    become_method: runas
+    become_user: SYSTEM
     ansible_winrm_server_cert_validation: ignore
     ansible_port: 5985
     ansible_winrm_operation_timeout_sec: 60
