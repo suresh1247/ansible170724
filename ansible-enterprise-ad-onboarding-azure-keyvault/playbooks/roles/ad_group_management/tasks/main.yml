@@ -1,36 +1,60 @@
 ---
 # Role: ad_group_management
-# Purpose: Create PAM security groups
+# Purpose: Create PAM security groups with SearchBase
 
 - name: GROUP | Ensure PAM Groups OU exists
-  microsoft.ad.ou:
-    name: PAM-Groups
-    path: "{{ ou_base_dn }}"
-    description: "Container for all PAM security groups"
-    state: present
-    scope: one_level
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $BaseDN = "{{ ou_base_dn }}"
+    $PAMOU = Get-ADOrganizationalUnit -Filter "Name -eq 'PAM-Groups'" -SearchBase $BaseDN -ErrorAction SilentlyContinue
+    if (-not $PAMOU) {
+        New-ADOrganizationalUnit -Name "PAM-Groups" -Path $BaseDN -Description "Container for all PAM security groups"
+        Write-Output "CREATED"
+    } else {
+        Write-Output "EXISTS"
+    }
   run_once: true
   register: pam_ou_result
   when: not enable_dry_run | bool
+  changed_when: pam_ou_result.stdout == "CREATED"
 
-- name: GROUP | Ensure PAM security group exists
-  microsoft.ad.group:
-    name: "{{ ad_group_name }}"
-    path: "OU=PAM-Groups,{{ ou_base_dn }}"
-    scope: global
-    category: security
-    description: "PAM group for {{ application_name }} ({{ server_type }} server)"
-    state: present
+- name: GROUP | Ensure PAM security group exists with SearchBase
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $GroupName = "{{ ad_group_name }}"
+    $GroupPath = "OU=PAM-Groups,{{ ou_base_dn }}"
+    $Group = Get-ADGroup -Filter "Name -eq '$GroupName'" -SearchBase $GroupPath -ErrorAction SilentlyContinue
+    if (-not $Group) {
+        New-ADGroup -Name $GroupName -GroupScope Global -GroupCategory Security -Path $GroupPath -Description "PAM group for {{ application_name }} ({{ server_type }} server)"
+        Write-Output "CREATED"
+    } else {
+        Write-Output "EXISTS"
+    }
   run_once: true
   register: group_result
   when: not enable_dry_run | bool
+  changed_when: group_result.stdout == "CREATED"
 
-- name: GROUP | Ensure opsintel user is member of PAM group
-  microsoft.ad.group_membership:
-    group_name: "{{ ad_group_name }}"
-    members:
-      - opsintel
-    state: present
+- name: GROUP | Add opsintel user to PAM group
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $GroupName = "{{ ad_group_name }}"
+    $UserName = "opsintel"
+    
+    $UserExists = Get-ADUser -Filter "SamAccountName -eq '$UserName'" -ErrorAction SilentlyContinue
+    if (-not $UserExists) {
+        Write-Output "USER_NOT_FOUND"
+        exit 0
+    }
+    
+    $IsMember = Get-ADGroupMember -Identity $GroupName -ErrorAction SilentlyContinue | Where-Object { $_.SamAccountName -eq $UserName }
+    if ($IsMember) {
+        Write-Output "ALREADY_MEMBER"
+    } else {
+        Add-ADGroupMember -Identity $GroupName -Members $UserName
+        Write-Output "ADDED"
+    }
   run_once: true
   register: opsintel_result
   when: not enable_dry_run | bool
+  changed_when: opsintel_result.stdout == "ADDED"
