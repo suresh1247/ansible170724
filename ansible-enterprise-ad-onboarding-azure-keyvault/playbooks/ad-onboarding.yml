@@ -4,9 +4,11 @@
   gather_facts: yes
   gather_subset:
     - min
+  
   become: true
   become_method: runas
-  become_user: SYSTEM 
+  become_user: SYSTEM
+  
   vars_files:
     - ../vault.yml
   
@@ -41,13 +43,10 @@
     ansible_port: 5985
     ansible_winrm_operation_timeout_sec: 60
     ansible_winrm_read_timeout_sec: 120
-    
-    # Windows become settings - DO NOT set become at play level
-    # This will be handled by the module_utils or winrm connection
 
   pre_tasks:
     # ============================================
-    # SAFETY: Require explicit approval before making AD changes
+    # SAFETY: Require explicit approval
     # ============================================
     - name: SAFETY | Require explicit approval before making AD changes
       ansible.builtin.assert:
@@ -381,7 +380,7 @@
           changed_when: gpo_link_result.stdout == "LINKED"
 
         # ============================================
-        # RESTRICTED GROUPS with PAM Group
+        # RESTRICTED GROUPS - WORKING METHOD
         # ============================================
         - name: RESTRICTED | Backup GPO before modification
           ansible.windows.win_shell: |
@@ -398,52 +397,65 @@
           no_log: true
           changed_when: gpo_backup.stdout == "BACKUP_CREATED"
 
-        - name: RESTRICTED | Add PAM group to Administrators via GPO
+        - name: RESTRICTED | Create and apply Restricted Groups using PowerShell
           ansible.windows.win_shell: |
             $GPOName = "{{ gpo_name }}"
             $DomainName = "{{ domain_name }}"
             $GroupToAdd = "{{ ad_group_name }}"
             
+            # Import required module
             Import-Module GroupPolicy -ErrorAction Stop
+            
+            # Get GPO and its ID
             $GPO = Get-GPO -Name $GPOName
             $GPOId = $GPO.Id.ToString()
+            
+            # Define the security template content
+            $TemplateContent = @"
+[Unicode]
+Unicode=yes
+[Version]
+signature="`$CHICAGO$`"
+Revision=1
+[Group Membership]
+Administrators__Members = $GroupToAdd
+Administrators__MemberOf = 
+"@
+            
+            # Path to the GPO's security template
             $SecEditPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\Machine\Microsoft\Windows NT\SecEdit"
-            if (-not (Test-Path $SecEditPath)) { New-Item -Path $SecEditPath -ItemType Directory -Force | Out-Null }
+            if (-not (Test-Path $SecEditPath)) {
+                New-Item -Path $SecEditPath -ItemType Directory -Force
+            }
             
             $GptTmplPath = Join-Path $SecEditPath "GptTmpl.inf"
             
-            $Content = ""
+            # Check if already configured
+            $alreadyConfigured = $false
             if (Test-Path $GptTmplPath) {
-                $Content = Get-Content $GptTmplPath -Raw
+                $ExistingContent = Get-Content $GptTmplPath -Raw
+                if ($ExistingContent -match "Administrators__Members.*$GroupToAdd") {
+                    $alreadyConfigured = $true
+                    Write-Output "ALREADY_CONFIGURED"
+                }
             }
             
-            if ($Content -match "Administrators__Members.*$GroupToAdd") {
-                Write-Output "ALREADY_CONFIGURED"
-            } else {
-                $GroupEntry = "Administrators__Members = $GroupToAdd"
-                $GroupEntry2 = "Administrators__MemberOf = "
+            if (-not $alreadyConfigured) {
+                # Write the template content to GptTmpl.inf
+                $TemplateContent | Set-Content -Path $GptTmplPath -Force -Encoding ASCII
                 
-                if ($Content -match "Administrators__Members") {
-                    $Content = $Content -replace "Administrators__Members = .*", $GroupEntry
-                } else {
-                    if ($Content -match "\[Group Membership\]") {
-                        $Content = $Content -replace "\[Group Membership\]", "[Group Membership]`n$GroupEntry`n$GroupEntry2"
-                    } else {
-                        $Content += "`n[Group Membership]`n$GroupEntry`n$GroupEntry2"
-                    }
-                }
-                
-                $Content | Set-Content -Path $GptTmplPath -Force -Encoding ASCII
-                
+                # Update GPO version
                 $GptIniPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\GPT.INI"
                 if (Test-Path $GptIniPath) {
                     $GptIni = Get-Content $GptIniPath -Raw
                     if ($GptIni -match "Version=(\d+)") {
-                        $NewVersion = [int]$matches[1] + 1
-                        $GptIni = $GptIni -replace "Version=$($matches[1])", "Version=$NewVersion"
+                        $CurrentVersion = [int]$matches[1]
+                        $NewVersion = $CurrentVersion + 1
+                        $GptIni = $GptIni -replace "Version=$CurrentVersion", "Version=$NewVersion"
                         $GptIni | Set-Content $GptIniPath -Force
                     }
                 }
+                
                 Write-Output "CONFIGURED"
             }
           run_once: true
@@ -452,14 +464,16 @@
           no_log: true
           changed_when: rg_result.stdout == "CONFIGURED"
 
-        - name: RESTRICTED | Verify configuration
+        - name: RESTRICTED | Verify Restricted Groups configuration
           ansible.windows.win_shell: |
             $GPOName = "{{ gpo_name }}"
             $DomainName = "{{ domain_name }}"
             $GroupToAdd = "{{ ad_group_name }}"
+            
             $GPO = Get-GPO -Name $GPOName
             $GPOId = $GPO.Id.ToString()
             $GptTmplPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf"
+            
             if (Test-Path $GptTmplPath) {
                 $Content = Get-Content $GptTmplPath -Raw
                 if ($Content -match "Administrators__Members.*$GroupToAdd") {
@@ -562,3 +576,10 @@
           - "  GPO Refresh: {{ gpupdate_result.stdout | default('N/A') }}"
           - ""
           - "=========================================="
+
+    - name: REPORT | Fail if server not found
+      ansible.builtin.fail:
+        msg: "Server '{{ server_name }}' not found in Active Directory. Onboarding stopped."
+      when: 
+        - not server_exists | default(false)
+        - requester_confirmation | upper == 'NO'
