@@ -68,19 +68,53 @@
     gpo_name: "{{ application_name[:3] | upper }}-SRV-{{ application_name }}{{ 'SQL' if ('SQL' in server_name | upper) else '' }}"
   when: server_exists | bool
 
+- name: COMPUTER | Get current server location
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $Computer = Get-ADComputer -Identity "{{ server_name }}" -Properties DistinguishedName
+    $CurrentParent = ($Computer.DistinguishedName -split ',', 2)[1]
+    Write-Output "CURRENT_PARENT:$CurrentParent"
+  run_once: true
+  register: current_location
+  when: server_exists and not enable_dry_run | bool
+
+- name: COMPUTER | Display current vs target location
+  ansible.builtin.debug:
+    msg:
+      - "Current OU: {{ current_location.stdout.split(':',1)[1] }}"
+      - "Target OU: {{ target_ou_dn }}"
+  when: server_exists and not enable_dry_run | bool
+
 - name: COMPUTER | Move server to target OU
   ansible.windows.win_shell: |
     Import-Module ActiveDirectory -ErrorAction Stop
     $TargetOU = "{{ target_ou_dn }}"
     $Computer = Get-ADComputer -Identity "{{ server_name }}" -Properties DistinguishedName
     $CurrentParent = ($Computer.DistinguishedName -split ',', 2)[1]
-    if ($CurrentParent -ne $TargetOU) {
+    
+    if ($CurrentParent -eq $TargetOU) {
+        Write-Output "EXISTS"
+    } else {
         Move-ADObject -Identity $Computer.DistinguishedName -TargetPath $TargetOU -Confirm:$false
         Write-Output "MOVED"
-    } else {
-        Write-Output "EXISTS"
     }
   run_once: true
   register: server_move
   when: server_exists and not enable_dry_run | bool
   changed_when: server_move.stdout == "MOVED"
+
+- name: COMPUTER | Verify server move
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $Computer = Get-ADComputer -Identity "{{ server_name }}" -Properties DistinguishedName, CanonicalName
+    $CurrentParent = ($Computer.DistinguishedName -split ',', 2)[1]
+    $CanonicalName = $Computer.CanonicalName
+    Write-Output "VERIFIED|Current Parent: $CurrentParent|Canonical: $CanonicalName"
+  run_once: true
+  register: verify_move
+  when: server_exists and not enable_dry_run | bool and server_move.stdout == "MOVED"
+
+- name: COMPUTER | Display verification result
+  ansible.builtin.debug:
+    msg: "Server moved successfully to: {{ verify_move.stdout }}"
+  when: server_exists and not enable_dry_run | bool and server_move.stdout == "MOVED"
