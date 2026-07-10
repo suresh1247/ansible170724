@@ -2,13 +2,26 @@
 # Role: ad_validation
 # Purpose: Validate input parameters and prerequisites
 
+- name: VALIDATION | Require explicit approval before making AD changes
+  ansible.builtin.assert:
+    that:
+      - requester_confirmation | upper == 'YES'
+    fail_msg: |
+      ==========================================
+      ❌ CHANGE APPROVAL REQUIRED ❌
+      ==========================================
+      Change approval was not confirmed.
+      requester_confirmation must be YES.
+      Current value: {{ requester_confirmation }}
+      ==========================================
+    success_msg: "✓ Change approval confirmed"
+
 - name: VALIDATION | Validate required parameters
   ansible.builtin.assert:
     that:
       - server_name is defined
       - application_name is defined
       - domain_name is defined
-      - requester_confirmation is defined
     fail_msg: "Missing required parameters"
     success_msg: "✓ Required parameters validation passed"
 
@@ -32,17 +45,3 @@
       - domain_name is match(domain_name_pattern)
     fail_msg: "Invalid domain name format: {{ domain_name }}"
     success_msg: "✓ Domain name validation passed"
-
-- name: VALIDATION | Require explicit approval before making AD changes
-  ansible.builtin.assert:
-    that:
-      - requester_confirmation | upper == 'YES'
-    fail_msg: |
-      ==========================================
-      ❌ CHANGE APPROVAL REQUIRED ❌
-      ==========================================
-      Change approval was not confirmed.
-      requester_confirmation must be YES.
-      Current value: {{ requester_confirmation }}
-      ==========================================
-    success_msg: "✓ Change approval confirmed"
