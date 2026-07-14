@@ -19,12 +19,6 @@
         msg: "Requirements file not found at {{ requirements_file }}"
       when: not req_file.stat.exists
 
-    - name: Get current collection list before installation
-      ansible.builtin.shell:
-        cmd: ansible-galaxy collection list --format json
-      register: pre_install_collections
-      changed_when: false
-
     - name: Install collections from requirements file
       ansible.builtin.command:
         cmd: ansible-galaxy collection install -r {{ requirements_file }} -p {{ collection_install_path }} --force-with-deps
@@ -36,81 +30,25 @@
       ansible.builtin.debug:
         var: install_result.stdout_lines
 
-    - name: Get updated collection list after installation
+    - name: Install Python dependencies for Azure collection
+      ansible.builtin.pip:
+        requirements: "{{ collection_install_path }}/ansible_collections/azure/azcollection/requirements-azure.txt"
+        state: present
+      when: "'azure.azcollection' in install_result.stdout"
+      failed_when: false
+
+    - name: Get collection list in simple text format
       ansible.builtin.shell:
-        cmd: ansible-galaxy collection list --format json
-      register: post_install_collections
+        cmd: ansible-galaxy collection list | grep -E '^[a-z]' | awk '{print $1, $2}'
+      register: collection_list_text
       changed_when: false
-
-    - name: Parse collection lists - extract collection names and versions
-      ansible.builtin.set_fact:
-        pre_collections: >-
-          {%- set ns = namespace(collections=[]) -%}
-          {%- for namespace, collections in (pre_install_collections.stdout | from_json).items() -%}
-            {%- for collection_name, collection_data in collections.items() -%}
-              {%- set full_name = namespace + '.' + collection_name -%}
-              {%- set _ = ns.collections.append({'name': full_name, 'version': collection_data.version}) -%}
-            {%- endfor -%}
-          {%- endfor -%}
-          {{ ns.collections }}
-        
-        post_collections: >-
-          {%- set ns = namespace(collections=[]) -%}
-          {%- for namespace, collections in (post_install_collections.stdout | from_json).items() -%}
-            {%- for collection_name, collection_data in collections.items() -%}
-              {%- set full_name = namespace + '.' + collection_name -%}
-              {%- set _ = ns.collections.append({'name': full_name, 'version': collection_data.version}) -%}
-            {%- endfor -%}
-          {%- endfor -%}
-          {{ ns.collections }}
-
-    - name: Identify newly installed collections
-      ansible.builtin.set_fact:
-        pre_names: "{{ pre_collections | map(attribute='name') | list }}"
-        post_names: "{{ post_collections | map(attribute='name') | list }}"
-        new_collections: >-
-          {%- set ns = namespace(new=[]) -%}
-          {%- for collection in post_collections -%}
-            {%- if collection.name not in pre_names -%}
-              {%- set _ = ns.new.append(collection) -%}
-            {%- endif -%}
-          {%- endfor -%}
-          {{ ns.new }}
 
     - name: "==================== COLLECTION INSTALLATION SUMMARY ===================="
       ansible.builtin.debug:
-        msg: "{{ '=' * 60 }}"
-
-    - name: "Display total count of installed collections"
-      ansible.builtin.debug:
-        msg: "Total Collections Installed: {{ post_collections | length }}"
-
-    - name: "Display count of newly installed collections"
-      ansible.builtin.debug:
-        msg: "Newly Installed Collections: {{ new_collections | length }}"
-
-    - name: "Display all collections with status"
-      ansible.builtin.debug:
         msg: |
-          ==================== FULL COLLECTION LIST ====================
-          {% for collection in post_collections | sort(attribute='name') %}
-          ✅ {{ collection.name }} {{ collection.version }}
-          {% endfor %}
-          =============================================================
-
-    - name: "Display newly installed collections separately"
-      ansible.builtin.debug:
-        msg: |
-          ==================== NEWLY INSTALLED COLLECTIONS ====================
-          {% if new_collections | length > 0 %}
-          {% for collection in new_collections | sort(attribute='name') %}
-          🆕 {{ collection.name }} {{ collection.version }}
-          {% endfor %}
-          {% else %}
-          No new collections were installed.
-          {% endif %}
-          =====================================================================
-
-    - name: "==================== END OF COLLECTION SUMMARY ===================="
-      ansible.builtin.debug:
-        msg: "Installation Complete! Collection list displayed above."
+          ════════════════════════════════════════════════════════
+          COLLECTIONS INSTALLED ON AAP SERVER
+          ════════════════════════════════════════════════════════
+          {{ collection_list_text.stdout }}
+          ════════════════════════════════════════════════════════
+          Installation completed successfully!
