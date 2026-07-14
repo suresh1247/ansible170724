@@ -1,0 +1,7 @@
+---
+collections:
+  - name: azure.azcollection
+    # It is best practice to pin a version for stability.
+    version: ">=3.0.0"
+  - name: microsoft.ad
+    version: ">=1.0.0"
