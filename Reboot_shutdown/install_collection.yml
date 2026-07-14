@@ -42,40 +42,63 @@
       register: post_install_collections
       changed_when: false
 
-    - name: Parse collection lists
+    - name: Parse collection lists - extract collection names and versions
       ansible.builtin.set_fact:
-        pre_list: "{{ pre_install_collections.stdout | from_json }}"
-        post_list: "{{ post_install_collections.stdout | from_json }}"
+        pre_collections: >-
+          {%- set ns = namespace(collections=[]) -%}
+          {%- for namespace, collections in (pre_install_collections.stdout | from_json).items() -%}
+            {%- for collection_name, collection_data in collections.items() -%}
+              {%- set full_name = namespace + '.' + collection_name -%}
+              {%- set _ = ns.collections.append({'name': full_name, 'version': collection_data.version}) -%}
+            {%- endfor -%}
+          {%- endfor -%}
+          {{ ns.collections }}
+        
+        post_collections: >-
+          {%- set ns = namespace(collections=[]) -%}
+          {%- for namespace, collections in (post_install_collections.stdout | from_json).items() -%}
+            {%- for collection_name, collection_data in collections.items() -%}
+              {%- set full_name = namespace + '.' + collection_name -%}
+              {%- set _ = ns.collections.append({'name': full_name, 'version': collection_data.version}) -%}
+            {%- endfor -%}
+          {%- endfor -%}
+          {{ ns.collections }}
 
     - name: Identify newly installed collections
       ansible.builtin.set_fact:
-        new_collections: "{{ post_list | difference(pre_list) }}"
+        pre_names: "{{ pre_collections | map(attribute='name') | list }}"
+        post_names: "{{ post_collections | map(attribute='name') | list }}"
+        new_collections: >-
+          {%- set ns = namespace(new=[]) -%}
+          {%- for collection in post_collections -%}
+            {%- if collection.name not in pre_names -%}
+              {%- set _ = ns.new.append(collection) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ ns.new }}
 
-    # ============================================
-    # FINAL DISPLAY - SHOW ALL COLLECTIONS
-    # ============================================
     - name: "==================== COLLECTION INSTALLATION SUMMARY ===================="
       ansible.builtin.debug:
         msg: "{{ '=' * 60 }}"
 
     - name: "Display total count of installed collections"
       ansible.builtin.debug:
-        msg: "Total Collections Installed: {{ post_list | length }}"
+        msg: "Total Collections Installed: {{ post_collections | length }}"
 
     - name: "Display count of newly installed collections"
       ansible.builtin.debug:
         msg: "Newly Installed Collections: {{ new_collections | length }}"
 
-    - name: Display detailed installed collections
+    - name: "Display all collections with status"
       ansible.builtin.debug:
         msg: |
           ==================== FULL COLLECTION LIST ====================
-          {% for collection in post_list | sort(attribute='name') %}
+          {% for collection in post_collections | sort(attribute='name') %}
           ✅ {{ collection.name }} {{ collection.version }}
           {% endfor %}
           =============================================================
 
-    - name: Display newly installed collections separately
+    - name: "Display newly installed collections separately"
       ansible.builtin.debug:
         msg: |
           ==================== NEWLY INSTALLED COLLECTIONS ====================
