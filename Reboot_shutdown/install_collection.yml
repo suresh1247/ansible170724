@@ -1,0 +1,93 @@
+---
+- name: Install Azure and Active Directory Collections on AAP
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    collection_install_path: "{{ lookup('env', 'ANSIBLE_COLLECTIONS_PATH') | default('/usr/share/ansible/collections', true) }}"
+    requirements_file: "collections/requirements.yml"
+
+  tasks:
+    - name: Ensure requirements file exists
+      ansible.builtin.stat:
+        path: "{{ requirements_file }}"
+      register: req_file
+
+    - name: Fail if requirements file not found
+      ansible.builtin.fail:
+        msg: "Requirements file not found at {{ requirements_file }}"
+      when: not req_file.stat.exists
+
+    - name: Get current collection list before installation
+      ansible.builtin.shell:
+        cmd: ansible-galaxy collection list --format json
+      register: pre_install_collections
+      changed_when: false
+
+    - name: Install collections from requirements file
+      ansible.builtin.command:
+        cmd: ansible-galaxy collection install -r {{ requirements_file }} -p {{ collection_install_path }} --force-with-deps
+      register: install_result
+      changed_when: "'already installed' not in install_result.stdout"
+      failed_when: install_result.rc != 0
+
+    - name: Display installation output
+      ansible.builtin.debug:
+        var: install_result.stdout_lines
+
+    - name: Get updated collection list after installation
+      ansible.builtin.shell:
+        cmd: ansible-galaxy collection list --format json
+      register: post_install_collections
+      changed_when: false
+
+    - name: Parse collection lists
+      ansible.builtin.set_fact:
+        pre_list: "{{ pre_install_collections.stdout | from_json }}"
+        post_list: "{{ post_install_collections.stdout | from_json }}"
+
+    - name: Identify newly installed collections
+      ansible.builtin.set_fact:
+        new_collections: "{{ post_list | difference(pre_list) }}"
+
+    # ============================================
+    # FINAL DISPLAY - SHOW ALL COLLECTIONS
+    # ============================================
+    - name: "==================== COLLECTION INSTALLATION SUMMARY ===================="
+      ansible.builtin.debug:
+        msg: "{{ '=' * 60 }}"
+
+    - name: "Display total count of installed collections"
+      ansible.builtin.debug:
+        msg: "Total Collections Installed: {{ post_list | length }}"
+
+    - name: "Display count of newly installed collections"
+      ansible.builtin.debug:
+        msg: "Newly Installed Collections: {{ new_collections | length }}"
+
+    - name: Display detailed installed collections
+      ansible.builtin.debug:
+        msg: |
+          ==================== FULL COLLECTION LIST ====================
+          {% for collection in post_list | sort(attribute='name') %}
+          ✅ {{ collection.name }} {{ collection.version }}
+          {% endfor %}
+          =============================================================
+
+    - name: Display newly installed collections separately
+      ansible.builtin.debug:
+        msg: |
+          ==================== NEWLY INSTALLED COLLECTIONS ====================
+          {% if new_collections | length > 0 %}
+          {% for collection in new_collections | sort(attribute='name') %}
+          🆕 {{ collection.name }} {{ collection.version }}
+          {% endfor %}
+          {% else %}
+          No new collections were installed.
+          {% endif %}
+          =====================================================================
+
+    - name: "==================== END OF COLLECTION SUMMARY ===================="
+      ansible.builtin.debug:
+        msg: "Installation Complete! Collection list displayed above."
