@@ -8,7 +8,6 @@
     path: "{{ ou_base_dn }}"
     description: "LKM Root OU for server management"
     state: present
-    scope: one_level
   run_once: true
   register: lkm_ou_result
   when: not enable_dry_run | bool
@@ -19,7 +18,6 @@
     path: "OU=LKM,{{ ou_base_dn }}"
     description: "Container for all server OUs"
     state: present
-    scope: one_level
   run_once: true
   register: servers_ou_result
   when: not enable_dry_run | bool
@@ -30,7 +28,6 @@
     path: "OU=Servers,OU=LKM,{{ ou_base_dn }}"
     description: "Container for SQL server OUs"
     state: present
-    scope: one_level
   run_once: true
   register: sql_ou_result
   when: server_type is defined and server_type == "SQL" and not enable_dry_run | bool
@@ -41,7 +38,6 @@
     path: "{{ 'OU=SQL,OU=Servers,OU=LKM' if server_type is defined and server_type == 'SQL' else 'OU=Servers,OU=LKM' }},{{ ou_base_dn }}"
     description: "OU for {{ application_name }} application servers"
     state: present
-    scope: one_level
   run_once: true
   register: app_ou_result
   when: not enable_dry_run | bool

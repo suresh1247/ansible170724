@@ -4,3 +4,5 @@ collections:
     version: "3.5.0"
   - name: microsoft.ad
     version: "1.10.0"
+  - name: community.windows
+    version: "1.12.0"

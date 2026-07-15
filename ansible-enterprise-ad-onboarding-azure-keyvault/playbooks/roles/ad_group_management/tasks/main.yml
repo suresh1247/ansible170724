@@ -8,7 +8,6 @@
     path: "{{ ou_base_dn }}"
     description: "Container for all PAM security groups"
     state: present
-    scope: one_level
   run_once: true
   register: pam_ou_result
   when: not enable_dry_run | bool
