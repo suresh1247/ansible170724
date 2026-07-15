@@ -39,7 +39,7 @@
       - "Security Configuration:"
       - "  PAM Group: {{ ad_group_name | default('N/A') }}"
       - "  PAM Group Status: {{ 'CREATED' if group_result.changed else 'EXISTS' }}"
-      - "  opsintel User: {{ 'ADDED' if opsintel_result.changed else 'ALREADY_MEMBER' }}"
+      - "  opsintel User: {{ opsintel_result.stdout | default('N/A') }}"
       - "  Restricted Group: Administrators"
       - "  Restricted Group Member: {{ ad_group_name | default('N/A') }} (PAM Group)"
       - "  Restricted Group Status: {{ rg_result.stdout | default('CONFIGURED') }}"
