@@ -1,4 +1,99 @@
 ---
+# This play runs locally to retrieve credentials from Azure Key Vault
+- name: RETRIEVE CREDENTIALS FROM AZURE KEY VAULT
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  
+  vars:
+    # Enterprise settings
+    enable_dry_run: false
+    azure_keyvault_name: "{{ azure_keyvault_name }}"
+  
+  tasks:
+    # ============================================
+    # AZURE KEY VAULT: Login and get secrets
+    # ============================================
+    - name: AZURE | Validate Azure credentials from AAP credential
+      ansible.builtin.assert:
+        that:
+          - azure_client_id is defined
+          - azure_client_secret is defined
+          - azure_tenant_id is defined
+          - azure_subscription_id is defined
+          - azure_keyvault_name is defined
+        fail_msg: |
+          ==========================================
+          ❌ AZURE CREDENTIALS MISSING ❌
+          ==========================================
+          Please ensure the 'Azure Service Principal' 
+          credential is attached to this job template.
+          
+          Required fields:
+          - azure_client_id
+          - azure_client_secret
+          - azure_tenant_id
+          - azure_subscription_id
+          - azure_keyvault_name
+          ==========================================
+        success_msg: "✓ Azure credentials validated"
+
+    - name: AZURE | Login to Azure using Service Principal
+      ansible.builtin.shell: |
+        az login --service-principal \
+          --username "{{ azure_client_id }}" \
+          --password "{{ azure_client_secret }}" \
+          --tenant "{{ azure_tenant_id }}" \
+          --only-show-errors
+      run_once: true
+      no_log: true
+
+    - name: AZURE | Set subscription
+      ansible.builtin.shell: |
+        az account set --subscription "{{ azure_subscription_id }}"
+      run_once: true
+      no_log: true
+
+    - name: AZURE | Retrieve AD credentials from Key Vault
+      ansible.builtin.shell: |
+        az keyvault secret show \
+          --vault-name "{{ azure_keyvault_name }}" \
+          --name "{{ item }}" \
+          --query value \
+          -o tsv
+      loop:
+        - "ad-username"
+        - "ad-password"
+        - "ad-domain"
+      register: kv_secrets
+      no_log: true
+      run_once: true
+
+    - name: AZURE | Set credentials from Key Vault as facts
+      ansible.builtin.set_fact:
+        ad_username: "{{ kv_secrets.results[0].stdout }}"
+        ad_password: "{{ kv_secrets.results[1].stdout }}"
+        domain_name: "{{ kv_secrets.results[2].stdout }}"
+      no_log: true
+
+    - name: AZURE | Create credential file for use in next play
+      ansible.builtin.copy:
+        content: |
+          ansible_user: {{ kv_secrets.results[0].stdout }}
+          ansible_password: {{ kv_secrets.results[1].stdout }}
+          domain_name: {{ kv_secrets.results[2].stdout }}
+          ad_username: {{ kv_secrets.results[0].stdout }}
+          ad_password: {{ kv_secrets.results[1].stdout }}
+        dest: "/tmp/ad_credentials.yml"
+      run_once: true
+
+    - name: AZURE | Debug Azure Key Vault connection status
+      ansible.builtin.debug:
+        msg: "✓ Azure Key Vault '{{ azure_keyvault_name }}' connected successfully"
+
+# ============================================
+# Main AD Onboarding Play
+# ============================================
 - name: ENTERPRISE ACTIVE DIRECTORY ONBOARDING WITH AZURE KEY VAULT
   hosts: domain_controllers
   gather_facts: yes
@@ -10,7 +105,7 @@
   become_user: SYSTEM
   
   vars_files:
-    - ../azure_credentials.yml
+    - /tmp/ad_credentials.yml
   
   vars:
     # Enterprise settings
@@ -30,7 +125,9 @@
     # Base OU path
     ou_base_dn: "DC={{ domain_name.replace('.', ',DC=') }}"
     
-    # Connection settings (will be populated from Azure Key Vault)
+    # Connection settings
+    ansible_user: "{{ ansible_user }}"
+    ansible_password: "{{ ansible_password }}"
     ansible_connection: winrm
     ansible_winrm_transport: ntlm
     ansible_winrm_server_cert_validation: ignore
@@ -39,53 +136,6 @@
     ansible_winrm_read_timeout_sec: 120
 
   pre_tasks:
-    # ============================================
-    # AZURE KEY VAULT: Login and get secrets
-    # ============================================
-    - name: AZURE | Login to Azure using Service Principal
-      ansible.builtin.shell: |
-        az login --service-principal \
-          --username "{{ azure_client_id }}" \
-          --password "{{ azure_client_secret }}" \
-          --tenant "{{ azure_tenant_id }}" \
-          --only-show-errors
-      run_once: true
-      no_log: true
-      when: not enable_dry_run | bool
-
-    - name: AZURE | Set subscription
-      ansible.builtin.shell: |
-        az account set --subscription "{{ azure_subscription_id }}"
-      run_once: true
-      no_log: true
-      when: not enable_dry_run | bool
-
-    - name: AZURE | Retrieve AD credentials from Key Vault
-      ansible.builtin.shell: |
-        az keyvault secret show \
-          --vault-name "{{ azure_keyvault_name }}" \
-          --name "{{ item }}" \
-          --query value \
-          -o tsv
-      loop:
-        - "{{ azure_keyvault_secrets.ad_username }}"
-        - "{{ azure_keyvault_secrets.ad_password }}"
-        - "{{ azure_keyvault_secrets.ad_domain }}"
-      register: kv_secrets
-      no_log: true
-      run_once: true
-      when: not enable_dry_run | bool
-
-    - name: AZURE | Set credentials from Key Vault
-      ansible.builtin.set_fact:
-        ad_username: "{{ kv_secrets.results[0].stdout }}"
-        ad_password: "{{ kv_secrets.results[1].stdout }}"
-        domain_name: "{{ kv_secrets.results[2].stdout }}"
-        ansible_user: "{{ kv_secrets.results[0].stdout }}"
-        ansible_password: "{{ kv_secrets.results[1].stdout }}"
-      no_log: true
-      when: not enable_dry_run | bool
-
     - name: CONNECTION | Test connectivity to domain controller
       ansible.windows.win_ping:
       register: ping_test
@@ -120,60 +170,36 @@
   tasks:
     - name: MAIN | Execute AD onboarding
       block:
-        # ============================================
-        # STEP 1: Validation
-        # ============================================
         - name: Include validation role
           ansible.builtin.include_role:
             name: ad_validation
 
-        # ============================================
-        # STEP 2: Check if server exists
-        # ============================================
         - name: Include computer management - Check Only
           ansible.builtin.include_role:
             name: ad_computer_management
             tasks_from: check_server
 
-        # ============================================
-        # STEP 3: Create target OU
-        # ============================================
         - name: Include OU management role
           ansible.builtin.include_role:
             name: ad_ou_management
 
-        # ============================================
-        # STEP 4: Move server to target OU
-        # ============================================
         - name: Include computer management - Move Server
           ansible.builtin.include_role:
             name: ad_computer_management
             tasks_from: move_server
 
-        # ============================================
-        # STEP 5: Group Management
-        # ============================================
         - name: Include group management role
           ansible.builtin.include_role:
             name: ad_group_management
 
-        # ============================================
-        # STEP 6: GPO Management
-        # ============================================
         - name: Include GPO management role
           ansible.builtin.include_role:
             name: ad_gpo_management
 
-        # ============================================
-        # STEP 7: Restricted Groups
-        # ============================================
         - name: Include restricted groups role
           ansible.builtin.include_role:
             name: ad_restricted_groups
 
-        # ============================================
-        # STEP 8: Reporting
-        # ============================================
         - name: Include reporting role
           ansible.builtin.include_role:
             name: ad_reporting
@@ -186,3 +212,12 @@
         - name: ERROR | Re-raise failure
           ansible.builtin.fail:
             msg: "AD Onboarding failed for {{ server_name }}"
+
+  post_tasks:
+    - name: CLEANUP | Remove temporary credentials file
+      ansible.builtin.file:
+        path: "/tmp/ad_credentials.yml"
+        state: absent
+      delegate_to: localhost
+      run_once: true
+      when: not enable_dry_run | bool
