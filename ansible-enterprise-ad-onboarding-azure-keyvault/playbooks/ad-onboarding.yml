@@ -1,5 +1,5 @@
 ---
-- name: ENTERPRISE ACTIVE DIRECTORY ONBOARDING
+- name: ENTERPRISE ACTIVE DIRECTORY ONBOARDING WITH AZURE KEY VAULT
   hosts: domain_controllers
   gather_facts: yes
   gather_subset:
@@ -10,7 +10,7 @@
   become_user: SYSTEM
   
   vars_files:
-    - ../vault.yml
+    - ../azure_credentials.yml
   
   vars:
     # Enterprise settings
@@ -30,13 +30,7 @@
     # Base OU path
     ou_base_dn: "DC={{ domain_name.replace('.', ',DC=') }}"
     
-    # Extract credentials from vault (Service Account)
-    ad_username: "{{ ad_credentials.domain_admin_user }}"
-    ad_password: "{{ ad_credentials.vault_ad_password }}"
-    
-    # Connection settings
-    ansible_user: "{{ ad_credentials.domain_admin_user }}"
-    ansible_password: "{{ ad_credentials.vault_ad_password }}"
+    # Connection settings (will be populated from Azure Key Vault)
     ansible_connection: winrm
     ansible_winrm_transport: ntlm
     ansible_winrm_server_cert_validation: ignore
@@ -45,6 +39,53 @@
     ansible_winrm_read_timeout_sec: 120
 
   pre_tasks:
+    # ============================================
+    # AZURE KEY VAULT: Login and get secrets
+    # ============================================
+    - name: AZURE | Login to Azure using Service Principal
+      ansible.builtin.shell: |
+        az login --service-principal \
+          --username "{{ azure_client_id }}" \
+          --password "{{ azure_client_secret }}" \
+          --tenant "{{ azure_tenant_id }}" \
+          --only-show-errors
+      run_once: true
+      no_log: true
+      when: not enable_dry_run | bool
+
+    - name: AZURE | Set subscription
+      ansible.builtin.shell: |
+        az account set --subscription "{{ azure_subscription_id }}"
+      run_once: true
+      no_log: true
+      when: not enable_dry_run | bool
+
+    - name: AZURE | Retrieve AD credentials from Key Vault
+      ansible.builtin.shell: |
+        az keyvault secret show \
+          --vault-name "{{ azure_keyvault_name }}" \
+          --name "{{ item }}" \
+          --query value \
+          -o tsv
+      loop:
+        - "{{ azure_keyvault_secrets.ad_username }}"
+        - "{{ azure_keyvault_secrets.ad_password }}"
+        - "{{ azure_keyvault_secrets.ad_domain }}"
+      register: kv_secrets
+      no_log: true
+      run_once: true
+      when: not enable_dry_run | bool
+
+    - name: AZURE | Set credentials from Key Vault
+      ansible.builtin.set_fact:
+        ad_username: "{{ kv_secrets.results[0].stdout }}"
+        ad_password: "{{ kv_secrets.results[1].stdout }}"
+        domain_name: "{{ kv_secrets.results[2].stdout }}"
+        ansible_user: "{{ kv_secrets.results[0].stdout }}"
+        ansible_password: "{{ kv_secrets.results[1].stdout }}"
+      no_log: true
+      when: not enable_dry_run | bool
+
     - name: CONNECTION | Test connectivity to domain controller
       ansible.windows.win_ping:
       register: ping_test
@@ -62,9 +103,6 @@
       delay: "{{ ad_delay }}"
       no_log: true
 
-    # ============================================
-    # PRE-TASKS: Set server type and target OU early
-    # ============================================
     - name: PRE-TASKS | Set server type and target OU
       ansible.builtin.set_fact:
         server_type: "{{ 'SQL' if 'SQL' in server_name | upper else 'NON-SQL' }}"
@@ -90,7 +128,7 @@
             name: ad_validation
 
         # ============================================
-        # STEP 2: Check if server exists (but don't move yet)
+        # STEP 2: Check if server exists
         # ============================================
         - name: Include computer management - Check Only
           ansible.builtin.include_role:
@@ -98,14 +136,14 @@
             tasks_from: check_server
 
         # ============================================
-        # STEP 3: Create target OU (MUST happen before move)
+        # STEP 3: Create target OU
         # ============================================
-        - name: Include OU management role - Create target OU
+        - name: Include OU management role
           ansible.builtin.include_role:
             name: ad_ou_management
 
         # ============================================
-        # STEP 4: Move server to target OU (Now OU exists)
+        # STEP 4: Move server to target OU
         # ============================================
         - name: Include computer management - Move Server
           ansible.builtin.include_role:
