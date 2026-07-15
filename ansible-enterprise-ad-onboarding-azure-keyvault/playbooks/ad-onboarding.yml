@@ -62,9 +62,6 @@
       delay: "{{ ad_delay }}"
       no_log: true
 
-    # ============================================
-    # Set server_type and target_ou_dn early for all roles
-    # ============================================
     - name: PRE-TASKS | Set server type and target OU
       ansible.builtin.set_fact:
         server_type: "{{ 'SQL' if 'SQL' in server_name | upper else 'NON-SQL' }}"
@@ -86,11 +83,11 @@
           ansible.builtin.include_role:
             name: ad_validation
 
-        - name: Include OU management role (FIRST - Create target OU)
+        - name: Include OU management role
           ansible.builtin.include_role:
             name: ad_ou_management
 
-        - name: Include computer management role (SECOND - Move server to existing OU)
+        - name: Include computer management role
           ansible.builtin.include_role:
             name: ad_computer_management
 

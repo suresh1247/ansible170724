@@ -1,37 +1,21 @@
 ---
 # Role: ad_gpo_management
-# Purpose: Create and link GPO
+# Purpose: Create and link GPO using community.windows modules
 
 - name: GPO | Ensure GPO exists
-  ansible.windows.win_shell: |
-    Import-Module GroupPolicy -ErrorAction Stop
-    $GPOName = "{{ gpo_name }}"
-    $GPO = Get-GPO -Name $GPOName -ErrorAction SilentlyContinue
-    if (-not $GPO) {
-        New-GPO -Name $GPOName -Comment "GPO for {{ application_name }} ({{ server_type }} server)"
-        Write-Output "CREATED"
-    } else {
-        Write-Output "EXISTS"
-    }
+  community.windows.gpo:
+    name: "{{ gpo_name }}"
+    state: present
+    description: "GPO for {{ application_name }} ({{ server_type }} server)"
   run_once: true
   register: gpo_result
   when: not enable_dry_run | bool
-  changed_when: gpo_result.stdout == "CREATED"
 
 - name: GPO | Link GPO to Application OU
-  ansible.windows.win_shell: |
-    Import-Module GroupPolicy -ErrorAction Stop
-    $GPOName = "{{ gpo_name }}"
-    $TargetOU = "{{ target_ou_dn }}"
-    $Links = Get-GPInheritance -Target $TargetOU -ErrorAction SilentlyContinue
-    $Linked = $Links.GpoLinks | Where-Object { $_.DisplayName -eq $GPOName }
-    if (-not $Linked) {
-        New-GPLink -Name $GPOName -Target $TargetOU -LinkEnabled Yes
-        Write-Output "LINKED"
-    } else {
-        Write-Output "EXISTS"
-    }
+  community.windows.gpo_link:
+    name: "{{ gpo_name }}"
+    target: "{{ target_ou_dn }}"
+    enabled: yes
   run_once: true
   register: gpo_link_result
   when: not enable_dry_run | bool
-  changed_when: gpo_link_result.stdout == "LINKED"
