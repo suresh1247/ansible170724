@@ -2,6 +2,10 @@
 # Role: ad_ou_management
 # Purpose: Create OU hierarchy using microsoft.ad.ou module
 
+- name: OU | Display target OU path
+  ansible.builtin.debug:
+    msg: "Target OU path: {{ target_ou_dn }}"
+
 - name: OU | Ensure LKM OU exists
   microsoft.ad.ou:
     name: LKM
@@ -40,4 +44,9 @@
     state: present
   run_once: true
   register: app_ou_result
+  when: not enable_dry_run | bool
+
+- name: OU | Verify Application OU was created
+  ansible.builtin.debug:
+    msg: "Application OU '{{ application_name }}' created status: {{ 'CREATED' if app_ou_result.changed else 'EXISTS' }}"
   when: not enable_dry_run | bool

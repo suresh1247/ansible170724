@@ -1,0 +1,80 @@
+---
+# Role: ad_computer_management - Move Server Only
+# Purpose: Move server to target OU (after OU is created)
+
+- name: SERVER | Verify target OU exists before moving
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $TargetOU = "{{ target_ou_dn }}"
+    $OUExists = Get-ADOrganizationalUnit -Filter "DistinguishedName -eq '$TargetOU'" -ErrorAction SilentlyContinue
+    if ($OUExists) {
+        Write-Output "OU_EXISTS"
+    } else {
+        Write-Output "OU_NOT_FOUND"
+    }
+  run_once: true
+  register: ou_check
+  when: server_exists and not enable_dry_run | bool
+
+- name: SERVER | Fail if target OU does not exist
+  ansible.builtin.fail:
+    msg: "Target OU '{{ target_ou_dn }}' does not exist. Please ensure OU is created before moving server."
+  when: 
+    - server_exists and not enable_dry_run | bool
+    - ou_check.stdout == "OU_NOT_FOUND"
+
+- name: COMPUTER | Get current server location
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $Computer = Get-ADComputer -Identity "{{ server_name }}" -Properties DistinguishedName
+    $CurrentParent = ($Computer.DistinguishedName -split ',', 2)[1]
+    Write-Output "CURRENT_PARENT:$CurrentParent"
+  run_once: true
+  register: current_location
+  when: server_exists and not enable_dry_run | bool
+
+- name: COMPUTER | Display current vs target location
+  ansible.builtin.debug:
+    msg:
+      - "Current OU: {{ current_location.stdout.split(':',1)[1] }}"
+      - "Target OU: {{ target_ou_dn }}"
+  when: server_exists and not enable_dry_run | bool
+
+- name: COMPUTER | Move server to target OU
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $TargetOU = "{{ target_ou_dn }}"
+    $Computer = Get-ADComputer -Identity "{{ server_name }}" -Properties DistinguishedName
+    $CurrentParent = ($Computer.DistinguishedName -split ',', 2)[1]
+    
+    if ($CurrentParent -eq $TargetOU) {
+        Write-Output "ALREADY_IN_CORRECT_OU"
+    } else {
+        Move-ADObject -Identity $Computer.DistinguishedName -TargetPath $TargetOU -Confirm:$false
+        Write-Output "MOVED_SUCCESSFULLY"
+    }
+  run_once: true
+  register: server_move
+  when: server_exists and not enable_dry_run | bool
+  changed_when: server_move.stdout == "MOVED_SUCCESSFULLY"
+
+- name: COMPUTER | Set server move fact for reporting
+  ansible.builtin.set_fact:
+    server_moved: "{{ server_move.stdout == 'MOVED_SUCCESSFULLY' }}"
+  when: server_exists and not enable_dry_run | bool
+
+- name: COMPUTER | Verify server move
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $Computer = Get-ADComputer -Identity "{{ server_name }}" -Properties DistinguishedName, CanonicalName
+    $CurrentParent = ($Computer.DistinguishedName -split ',', 2)[1]
+    $CanonicalName = $Computer.CanonicalName
+    Write-Output "VERIFIED|Current Parent: $CurrentParent|Canonical: $CanonicalName"
+  run_once: true
+  register: verify_move
+  when: server_exists and not enable_dry_run | bool and server_move.stdout == "MOVED_SUCCESSFULLY"
+
+- name: COMPUTER | Display verification result
+  ansible.builtin.debug:
+    msg: "Server moved successfully to: {{ verify_move.stdout }}"
+  when: server_exists and not enable_dry_run | bool and server_move.stdout == "MOVED_SUCCESSFULLY"
