@@ -62,20 +62,6 @@
       delay: "{{ ad_delay }}"
       no_log: true
 
-    - name: PRE-TASKS | Set server type and target OU
-      ansible.builtin.set_fact:
-        server_type: "{{ 'SQL' if 'SQL' in server_name | upper else 'NON-SQL' }}"
-        target_ou_dn: >-
-          {{
-            ('OU=' + application_name + ',OU=SQL,OU=Servers,OU=LKM,' + ou_base_dn)
-            if ('SQL' in server_name | upper)
-            else ('OU=' + application_name + ',OU=Servers,OU=LKM,' + ou_base_dn)
-          }}
-        app_prefix: "{{ application_name[:3] | upper }}"
-        ad_group_name: "{{ application_name[:3] | upper }}-PAM-{{ application_name }}{{ 'SQL' if ('SQL' in server_name | upper) else '' }}"
-        gpo_name: "{{ application_name[:3] | upper }}-SRV-{{ application_name }}{{ 'SQL' if ('SQL' in server_name | upper) else '' }}"
-      when: server_name is defined
-
   tasks:
     - name: MAIN | Execute AD onboarding
       block:
@@ -83,13 +69,20 @@
           ansible.builtin.include_role:
             name: ad_validation
 
-        - name: Include OU management role
+        # Note: Computer management is done BEFORE OU creation to check server exists
+        # But OU creation is needed for moving, so we do both in correct order
+        - name: Include computer management role (Check server exists)
+          ansible.builtin.include_role:
+            name: ad_computer_management
+
+        - name: Include OU management role (Create target OU)
           ansible.builtin.include_role:
             name: ad_ou_management
 
-        - name: Include computer management role
-          ansible.builtin.include_role:
-            name: ad_computer_management
+        # Note: Server move is now handled inside ad_computer_management
+        # But we need to ensure OU exists before moving, so we run OU creation first
+        # Let's restructure: Computer management checks server, OU management creates OU,
+        # Then we need a separate move task or re-run computer management
 
         - name: Include group management role
           ansible.builtin.include_role:

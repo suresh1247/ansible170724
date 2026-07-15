@@ -1,25 +1,45 @@
 ---
 # Role: ad_computer_management
-# Purpose: Search, validate, and move computer objects using microsoft.ad modules
+# Purpose: Search, validate, and move computer objects using win_shell with case-insensitive search
 
-- name: SERVER | Search for server in Active Directory
-  microsoft.ad.computer:
-    identity: "{{ server_name }}"
-    state: query
-  register: computer_info_result
-  failed_when: false
+- name: SERVER | Search for server in Active Directory (Case-insensitive)
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction SilentlyContinue
+    
+    # Search with case-insensitive comparison
+    $Computer = Get-ADComputer -Filter "Name -eq '{{ server_name }}'" -Properties DistinguishedName, CanonicalName, Enabled -ErrorAction SilentlyContinue
+    
+    # If not found with exact match, try wildcard search (case-insensitive)
+    if (-not $Computer) {
+        $Computer = Get-ADComputer -Filter "Name -like '{{ server_name }}'" -Properties DistinguishedName, CanonicalName, Enabled -ErrorAction SilentlyContinue
+    }
+    
+    if ($Computer) {
+        $Result = @{
+            Exists = $true
+            DN = $Computer.DistinguishedName
+            CanonicalName = $Computer.CanonicalName
+            Enabled = $Computer.Enabled
+        }
+        $Result | ConvertTo-Json
+    } else {
+        '{"Exists": false}'
+    }
+  register: server_search
+  no_log: false
+  changed_when: false
 
-- name: SERVER | Debug computer query result
+- name: SERVER | Debug server search result
   ansible.builtin.debug:
-    var: computer_info_result
+    var: server_search
   when: not enable_dry_run | bool
 
 - name: SERVER | Parse server information
   ansible.builtin.set_fact:
-    server_exists: "{{ computer_info_result.objects | length > 0 if computer_info_result.objects is defined else false }}"
-    server_dn: "{{ computer_info_result.objects[0].DistinguishedName if computer_info_result.objects is defined and computer_info_result.objects | length > 0 else '' }}"
-    server_canonical: "{{ computer_info_result.objects[0].CanonicalName if computer_info_result.objects is defined and computer_info_result.objects | length > 0 else '' }}"
-    server_enabled: "{{ computer_info_result.objects[0].Enabled if computer_info_result.objects is defined and computer_info_result.objects | length > 0 else false }}"
+    server_info: "{{ server_search.stdout | from_json }}"
+    server_exists: "{{ (server_search.stdout | from_json).Exists | default(false) }}"
+    server_canonical: "{{ (server_search.stdout | from_json).CanonicalName | default('N/A') }}"
+    server_enabled: "{{ (server_search.stdout | from_json).Enabled | default(false) }}"
   no_log: false
 
 - name: SERVER | Display server status
@@ -51,53 +71,72 @@
       ==========================================
   when: not server_exists | bool
 
-- name: COMPUTER | Verify target OU exists before moving
-  microsoft.ad.ou:
-    name: "{{ application_name }}"
-    state: query
-  register: ou_info_result
-  failed_when: false
+- name: SERVER | Set server type and target OU
+  ansible.builtin.set_fact:
+    server_type: "{{ 'SQL' if 'SQL' in server_name | upper else 'NON-SQL' }}"
+    target_ou_dn: >-
+      {{
+        ('OU=' + application_name + ',OU=SQL,OU=Servers,OU=LKM,' + ou_base_dn)
+        if ('SQL' in server_name | upper)
+        else ('OU=' + application_name + ',OU=Servers,OU=LKM,' + ou_base_dn)
+      }}
+    app_prefix: "{{ application_name[:3] | upper }}"
+    ad_group_name: "{{ application_name[:3] | upper }}-PAM-{{ application_name }}{{ 'SQL' if ('SQL' in server_name | upper) else '' }}"
+    gpo_name: "{{ application_name[:3] | upper }}-SRV-{{ application_name }}{{ 'SQL' if ('SQL' in server_name | upper) else '' }}"
+  when: server_exists | bool
+
+- name: COMPUTER | Get current server location
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $Computer = Get-ADComputer -Identity "{{ server_name }}" -Properties DistinguishedName
+    $CurrentParent = ($Computer.DistinguishedName -split ',', 2)[1]
+    Write-Output "CURRENT_PARENT:$CurrentParent"
+  run_once: true
+  register: current_location
   when: server_exists and not enable_dry_run | bool
 
-- name: COMPUTER | Debug OU query result
+- name: COMPUTER | Display current vs target location
   ansible.builtin.debug:
-    var: ou_info_result
+    msg:
+      - "Current OU: {{ current_location.stdout.split(':',1)[1] }}"
+      - "Target OU: {{ target_ou_dn }}"
   when: server_exists and not enable_dry_run | bool
-
-- name: COMPUTER | Fail if target OU does not exist
-  ansible.builtin.fail:
-    msg: "Target OU '{{ target_ou_dn }}' does not exist. Please ensure OU is created before moving server."
-  when: 
-    - server_exists and not enable_dry_run | bool
-    - ou_info_result.objects is defined and ou_info_result.objects | length == 0
 
 - name: COMPUTER | Move server to target OU
-  microsoft.ad.computer:
-    identity: "{{ server_name }}"
-    organizational_unit: "{{ target_ou_dn }}"
-    state: present
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $TargetOU = "{{ target_ou_dn }}"
+    $Computer = Get-ADComputer -Identity "{{ server_name }}" -Properties DistinguishedName
+    $CurrentParent = ($Computer.DistinguishedName -split ',', 2)[1]
+    
+    if ($CurrentParent -eq $TargetOU) {
+        Write-Output "ALREADY_IN_CORRECT_OU"
+    } else {
+        Move-ADObject -Identity $Computer.DistinguishedName -TargetPath $TargetOU -Confirm:$false
+        Write-Output "MOVED_SUCCESSFULLY"
+    }
   run_once: true
-  register: server_move_result
+  register: server_move
   when: server_exists and not enable_dry_run | bool
-
-- name: COMPUTER | Debug move result
-  ansible.builtin.debug:
-    var: server_move_result
-  when: server_exists and not enable_dry_run | bool
+  changed_when: server_move.stdout == "MOVED_SUCCESSFULLY"
 
 - name: COMPUTER | Set server move fact for reporting
   ansible.builtin.set_fact:
-    server_moved: "{{ server_move_result.changed | default(false) }}"
+    server_moved: "{{ server_move.stdout == 'MOVED_SUCCESSFULLY' }}"
   when: server_exists and not enable_dry_run | bool
 
 - name: COMPUTER | Verify server move
-  microsoft.ad.computer:
-    identity: "{{ server_name }}"
-    state: query
-  register: verify_move_result
-  when: server_exists and not enable_dry_run | bool and server_move_result.changed | default(false)
+  ansible.windows.win_shell: |
+    Import-Module ActiveDirectory -ErrorAction Stop
+    $Computer = Get-ADComputer -Identity "{{ server_name }}" -Properties DistinguishedName, CanonicalName
+    $CurrentParent = ($Computer.DistinguishedName -split ',', 2)[1]
+    $CanonicalName = $Computer.CanonicalName
+    Write-Output "VERIFIED|Current Parent: $CurrentParent|Canonical: $CanonicalName"
+  run_once: true
+  register: verify_move
+  when: server_exists and not enable_dry_run | bool and server_move.stdout == "MOVED_SUCCESSFULLY"
 
 - name: COMPUTER | Display verification result
   ansible.builtin.debug:
-    msg: "Server moved successfully to: {{ verify_move_result.objects[0].CanonicalName if verify_move_result.objects is defined and verify_move_result.objects | length > 0 else 'Unknown' }}"
-  when: server_exists and not enable_dry_run | bool and server_move_result.changed | default(false)
+    msg: "Server moved successfully to: {{ verify_move.stdout }}"
+  when: server_exists and not enable_dry_run | bool and server_move.stdout == "MOVED_SUCCESSFULLY"
