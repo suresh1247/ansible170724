@@ -3,12 +3,9 @@
 # Purpose: Search, validate, and move computer objects using microsoft.ad modules
 
 - name: SERVER | Search for server in Active Directory
-  microsoft.ad.computer_info:
+  microsoft.ad.computer:
     identity: "{{ server_name }}"
-    properties:
-      - DistinguishedName
-      - CanonicalName
-      - Enabled
+    state: query
   register: computer_info_result
   failed_when: false
   no_log: true
@@ -52,8 +49,9 @@
   when: not server_exists | bool
 
 - name: COMPUTER | Verify target OU exists before moving
-  microsoft.ad.ou_info:
-    identity: "{{ target_ou_dn }}"
+  microsoft.ad.ou:
+    name: "{{ application_name }}"
+    state: query
   register: ou_info_result
   failed_when: false
   when: server_exists and not enable_dry_run | bool
@@ -80,11 +78,9 @@
   when: server_exists and not enable_dry_run | bool
 
 - name: COMPUTER | Verify server move
-  microsoft.ad.computer_info:
+  microsoft.ad.computer:
     identity: "{{ server_name }}"
-    properties:
-      - DistinguishedName
-      - CanonicalName
+    state: query
   register: verify_move_result
   when: server_exists and not enable_dry_run | bool and server_move_result.changed | default(false)
 
