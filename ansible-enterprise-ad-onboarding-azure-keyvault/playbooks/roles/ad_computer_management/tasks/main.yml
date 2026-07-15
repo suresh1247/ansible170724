@@ -8,16 +8,19 @@
     state: query
   register: computer_info_result
   failed_when: false
-  no_log: true
+
+- name: SERVER | Debug computer query result
+  ansible.builtin.debug:
+    var: computer_info_result
+  when: not enable_dry_run | bool
 
 - name: SERVER | Parse server information
   ansible.builtin.set_fact:
-    server_info: "{{ computer_info_result.objects[0] if computer_info_result.objects | length > 0 else {} }}"
-    server_exists: "{{ computer_info_result.objects | length > 0 }}"
-    server_dn: "{{ computer_info_result.objects[0].DistinguishedName if computer_info_result.objects | length > 0 else '' }}"
-    server_canonical: "{{ computer_info_result.objects[0].CanonicalName if computer_info_result.objects | length > 0 else '' }}"
-    server_enabled: "{{ computer_info_result.objects[0].Enabled if computer_info_result.objects | length > 0 else false }}"
-  no_log: true
+    server_exists: "{{ computer_info_result.objects | length > 0 if computer_info_result.objects is defined else false }}"
+    server_dn: "{{ computer_info_result.objects[0].DistinguishedName if computer_info_result.objects is defined and computer_info_result.objects | length > 0 else '' }}"
+    server_canonical: "{{ computer_info_result.objects[0].CanonicalName if computer_info_result.objects is defined and computer_info_result.objects | length > 0 else '' }}"
+    server_enabled: "{{ computer_info_result.objects[0].Enabled if computer_info_result.objects is defined and computer_info_result.objects | length > 0 else false }}"
+  no_log: false
 
 - name: SERVER | Display server status
   ansible.builtin.debug:
@@ -56,12 +59,17 @@
   failed_when: false
   when: server_exists and not enable_dry_run | bool
 
+- name: COMPUTER | Debug OU query result
+  ansible.builtin.debug:
+    var: ou_info_result
+  when: server_exists and not enable_dry_run | bool
+
 - name: COMPUTER | Fail if target OU does not exist
   ansible.builtin.fail:
     msg: "Target OU '{{ target_ou_dn }}' does not exist. Please ensure OU is created before moving server."
   when: 
     - server_exists and not enable_dry_run | bool
-    - ou_info_result.objects | length == 0
+    - ou_info_result.objects is defined and ou_info_result.objects | length == 0
 
 - name: COMPUTER | Move server to target OU
   microsoft.ad.computer:
@@ -70,6 +78,11 @@
     state: present
   run_once: true
   register: server_move_result
+  when: server_exists and not enable_dry_run | bool
+
+- name: COMPUTER | Debug move result
+  ansible.builtin.debug:
+    var: server_move_result
   when: server_exists and not enable_dry_run | bool
 
 - name: COMPUTER | Set server move fact for reporting
@@ -86,5 +99,5 @@
 
 - name: COMPUTER | Display verification result
   ansible.builtin.debug:
-    msg: "Server moved successfully to: {{ verify_move_result.objects[0].CanonicalName if verify_move_result.objects | length > 0 else 'Unknown' }}"
+    msg: "Server moved successfully to: {{ verify_move_result.objects[0].CanonicalName if verify_move_result.objects is defined and verify_move_result.objects | length > 0 else 'Unknown' }}"
   when: server_exists and not enable_dry_run | bool and server_move_result.changed | default(false)
