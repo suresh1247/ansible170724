@@ -7,7 +7,7 @@
   
   tasks:
     # ============================================
-    # AZURE KEY VAULT: Using azure.azcollection
+    # AZURE KEY VAULT: Using shell commands
     # ============================================
     - name: AZURE | Validate Azure credentials from AAP credential
       ansible.builtin.assert:
@@ -33,57 +33,135 @@
           ==========================================
         success_msg: "✓ Azure credentials validated"
 
-    - name: AZURE | Display Azure credentials status (debug only)
-      ansible.builtin.debug:
-        msg:
-          - "Azure Client ID: {{ azure_client_id[:4] }}****"
-          - "Azure Tenant ID: {{ azure_tenant_id[:4] }}****"
-          - "Azure Key Vault: {{ azure_keyvault_name }}"
-      when: not enable_dry_run | bool
+    - name: AZURE | Check if Azure CLI is installed
+      ansible.builtin.shell: |
+        which az || echo "NOT_INSTALLED"
+      register: az_cli_check
+      changed_when: false
 
-    - name: AZURE | Set Azure authentication facts
-      ansible.builtin.set_fact:
-        azure_auth:
-          subscription_id: "{{ azure_subscription_id }}"
-          client_id: "{{ azure_client_id }}"
-          secret: "{{ azure_client_secret }}"
-          tenant: "{{ azure_tenant_id }}"
-      no_log: true
+    - name: AZURE | Install Azure CLI if not present (RHEL/CentOS)
+      ansible.builtin.shell: |
+        rpm --import https://packages.microsoft.com/keys/microsoft.asc
+        dnf install -y https://packages.microsoft.com/config/rhel/9/packages-microsoft-prod.rpm
+        dnf install -y azure-cli
+      when: 
+        - az_cli_check.stdout == "NOT_INSTALLED"
+        - ansible_os_family == "RedHat"
+      register: az_install_result
+      ignore_errors: yes
 
-    - name: AZURE | Retrieve AD username from Key Vault
-      azure.azcollection.azure_rm_keyvaultsecret_info:
-        vault_uri: "https://{{ azure_keyvault_name }}.vault.azure.net/"
-        name: "ad-username"
-        subscription_id: "{{ azure_subscription_id }}"
-        client_id: "{{ azure_client_id }}"
-        secret: "{{ azure_client_secret }}"
-        tenant: "{{ azure_tenant_id }}"
-      register: kv_username_result
-      no_log: true
+    - name: AZURE | Install Azure CLI if not present (Ubuntu/Debian)
+      ansible.builtin.shell: |
+        apt-get update
+        apt-get install -y curl gnupg
+        curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+      when: 
+        - az_cli_check.stdout == "NOT_INSTALLED"
+        - ansible_os_family == "Debian"
+      register: az_install_result
+      ignore_errors: yes
+
+    - name: AZURE | Verify Azure CLI is available
+      ansible.builtin.command: |
+        az --version
+      register: az_version
+      changed_when: false
       failed_when: false
 
-    - name: AZURE | Retrieve AD password from Key Vault
-      azure.azcollection.azure_rm_keyvaultsecret_info:
-        vault_uri: "https://{{ azure_keyvault_name }}.vault.azure.net/"
-        name: "ad-password"
-        subscription_id: "{{ azure_subscription_id }}"
-        client_id: "{{ azure_client_id }}"
-        secret: "{{ azure_client_secret }}"
-        tenant: "{{ azure_tenant_id }}"
-      register: kv_password_result
-      no_log: true
-      failed_when: false
+    - name: AZURE | Fail if Azure CLI not available
+      ansible.builtin.fail:
+        msg: |
+          ==========================================
+          ❌ AZURE CLI NOT AVAILABLE ❌
+          ==========================================
+          Azure CLI is required for this playbook.
+          
+          Please ensure Azure CLI is installed on the AAP runner.
+          
+          To install:
+          - RHEL/CentOS: dnf install -y azure-cli
+          - Ubuntu/Debian: curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+          ==========================================
+      when: az_version.rc != 0
 
-    - name: AZURE | Retrieve AD domain from Key Vault
-      azure.azcollection.azure_rm_keyvaultsecret_info:
-        vault_uri: "https://{{ azure_keyvault_name }}.vault.azure.net/"
-        name: "ad-domain"
-        subscription_id: "{{ azure_subscription_id }}"
-        client_id: "{{ azure_client_id }}"
-        secret: "{{ azure_client_secret }}"
-        tenant: "{{ azure_tenant_id }}"
-      register: kv_domain_result
+    - name: AZURE | Login to Azure using Service Principal
+      ansible.builtin.shell: |
+        az login --service-principal \
+          --username "{{ azure_client_id }}" \
+          --password "{{ azure_client_secret }}" \
+          --tenant "{{ azure_tenant_id }}" \
+          --only-show-errors
+      run_once: true
       no_log: true
+      register: azure_login_result
+
+    - name: AZURE | Check Azure login status
+      ansible.builtin.fail:
+        msg: |
+          ==========================================
+          ❌ AZURE LOGIN FAILED ❌
+          ==========================================
+          Please verify:
+          1. Azure Client ID is correct
+          2. Azure Client Secret is correct
+          3. Azure Tenant ID is correct
+          4. Service Principal has proper permissions
+          ==========================================
+      when: azure_login_result.rc != 0
+
+    - name: AZURE | Set subscription
+      ansible.builtin.shell: |
+        az account set --subscription "{{ azure_subscription_id }}"
+      run_once: true
+      no_log: true
+      register: azure_subscription_result
+
+    - name: AZURE | Check subscription status
+      ansible.builtin.fail:
+        msg: |
+          ==========================================
+          ❌ AZURE SUBSCRIPTION SET FAILED ❌
+          ==========================================
+          Please verify:
+          1. Subscription ID is correct
+          2. Service Principal has access to this subscription
+          ==========================================
+      when: azure_subscription_result.rc != 0
+
+    - name: AZURE | Verify Key Vault access
+      ansible.builtin.shell: |
+        az keyvault show --name "{{ azure_keyvault_name }}" --query "name" -o tsv
+      run_once: true
+      no_log: true
+      register: kv_verify_result
+
+    - name: AZURE | Check Key Vault access status
+      ansible.builtin.fail:
+        msg: |
+          ==========================================
+          ❌ AZURE KEY VAULT ACCESS FAILED ❌
+          ==========================================
+          Please verify:
+          1. Key Vault name is correct
+          2. Service Principal has 'get' and 'list' permissions on Key Vault
+          3. Key Vault exists in the subscription
+          ==========================================
+      when: kv_verify_result.rc != 0
+
+    - name: AZURE | Retrieve AD credentials from Key Vault
+      ansible.builtin.shell: |
+        az keyvault secret show \
+          --vault-name "{{ azure_keyvault_name }}" \
+          --name "{{ item }}" \
+          --query value \
+          -o tsv
+      loop:
+        - "ad-username"
+        - "ad-password"
+        - "ad-domain"
+      register: kv_secrets
+      no_log: true
+      run_once: true
       failed_when: false
 
     - name: AZURE | Check Key Vault secrets retrieval status
@@ -92,63 +170,25 @@
           ==========================================
           ❌ AZURE KEY VAULT SECRET RETRIEVAL FAILED ❌
           ==========================================
-          Failed to retrieve secret: ad-username
-          
-          Error: {{ kv_username_result.msg if kv_username_result.msg else 'Unknown error' }}
+          Failed to retrieve secret: {{ item.item }}
           
           Please verify:
-          1. Secret 'ad-username' exists in Key Vault
+          1. Secret '{{ item.item }}' exists in Key Vault
           2. Service Principal has 'get' permission for secrets
-          3. Key Vault name is correct
           ==========================================
-      when: kv_username_result.failed | default(false)
-
-    - name: AZURE | Check Key Vault secrets retrieval status - Password
-      ansible.builtin.fail:
-        msg: |
-          ==========================================
-          ❌ AZURE KEY VAULT SECRET RETRIEVAL FAILED ❌
-          ==========================================
-          Failed to retrieve secret: ad-password
-          
-          Error: {{ kv_password_result.msg if kv_password_result.msg else 'Unknown error' }}
-          
-          Please verify:
-          1. Secret 'ad-password' exists in Key Vault
-          2. Service Principal has 'get' permission for secrets
-          3. Key Vault name is correct
-          ==========================================
-      when: kv_password_result.failed | default(false)
-
-    - name: AZURE | Check Key Vault secrets retrieval status - Domain
-      ansible.builtin.fail:
-        msg: |
-          ==========================================
-          ❌ AZURE KEY VAULT SECRET RETRIEVAL FAILED ❌
-          ==========================================
-          Failed to retrieve secret: ad-domain
-          
-          Error: {{ kv_domain_result.msg if kv_domain_result.msg else 'Unknown error' }}
-          
-          Please verify:
-          1. Secret 'ad-domain' exists in Key Vault
-          2. Service Principal has 'get' permission for secrets
-          3. Key Vault name is correct
-          ==========================================
-      when: kv_domain_result.failed | default(false)
+      when: item.rc != 0
+      loop: "{{ kv_secrets.results }}"
+      loop_control:
+        loop_var: item
 
     - name: AZURE | Set credentials from Key Vault
       ansible.builtin.set_fact:
-        ad_username: "{{ kv_username_result.secrets[0].value }}"
-        ad_password: "{{ kv_password_result.secrets[0].value }}"
-        domain_name: "{{ kv_domain_result.secrets[0].value }}"
-        ansible_user: "{{ kv_username_result.secrets[0].value }}"
-        ansible_password: "{{ kv_password_result.secrets[0].value }}"
+        ad_username: "{{ kv_secrets.results[0].stdout }}"
+        ad_password: "{{ kv_secrets.results[1].stdout }}"
+        domain_name: "{{ kv_secrets.results[2].stdout }}"
+        ansible_user: "{{ kv_secrets.results[0].stdout }}"
+        ansible_password: "{{ kv_secrets.results[1].stdout }}"
       no_log: false
-      when: 
-        - not kv_username_result.failed | default(false)
-        - not kv_password_result.failed | default(false)
-        - not kv_domain_result.failed | default(false)
 
     - name: AZURE | Debug credentials status
       ansible.builtin.debug:
@@ -156,10 +196,6 @@
           - "✓ Azure Key Vault '{{ azure_keyvault_name }}' connected successfully"
           - "✓ AD Username: {{ ad_username }}"
           - "✓ AD Domain: {{ domain_name }}"
-      when: 
-        - ad_username is defined
-        - ad_password is defined
-        - domain_name is defined
 
     - name: AZURE | Create credential file for use in next play
       ansible.builtin.copy:
