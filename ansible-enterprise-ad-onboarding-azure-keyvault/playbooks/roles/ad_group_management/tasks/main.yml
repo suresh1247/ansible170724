@@ -30,14 +30,12 @@
     $GroupName = "{{ ad_group_name }}"
     $UserName = "opsintel"
     
-    # Check if user exists
     $UserExists = Get-ADUser -Filter "SamAccountName -eq '$UserName'" -ErrorAction SilentlyContinue
     if (-not $UserExists) {
         Write-Output "USER_NOT_FOUND"
         exit 0
     }
     
-    # Check if user is already a member
     $IsMember = Get-ADGroupMember -Identity $GroupName -ErrorAction SilentlyContinue | Where-Object { $_.SamAccountName -eq $UserName }
     if ($IsMember) {
         Write-Output "ALREADY_MEMBER"
