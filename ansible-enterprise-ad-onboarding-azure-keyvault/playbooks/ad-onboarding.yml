@@ -39,36 +39,7 @@
           - azure_keyvault_name
           ==========================================
         success_msg: "✓ Azure credentials validated from AAP"
-    - name: AZURE | Check if Azure CLI is installed
-      ansible.builtin.command: az --version
-      register: az_cli_check
-      failed_when: false
-      changed_when: false
-      ignore_errors: yes
 
-    - name: AZURE | Install Azure CLI on RHEL
-      ansible.builtin.dnf:
-        name: azure-cli
-        state: present
-      when: az_cli_check.rc != 0  # Only install if not present
-      become: yes
-
-    - name: AZURE | Verify Azure CLI is available
-      ansible.builtin.command: az --version
-      register: az_cli_verify
-      changed_when: false
-      when: az_cli_check.rc != 0
-
-    - name: AZURE | Fail if Azure CLI not available
-      ansible.builtin.fail:
-        msg: |
-          ==========================================
-          ❌ AZURE CLI NOT AVAILABLE ❌
-          ==========================================
-          Azure CLI is required for this playbook.
-          Please ensure Azure CLI is installed on the AAP runner.
-          ==========================================
-      when: az_cli_verify is defined and az_cli_verify.rc != 0
     - name: AZURE | Display Azure configuration (debug only)
       ansible.builtin.debug:
         msg:
