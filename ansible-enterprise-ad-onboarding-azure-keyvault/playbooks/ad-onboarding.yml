@@ -1,306 +1,267 @@
 ---
-# Play 1: Retrieve credentials from Azure Key Vault using azure.azcollection
 - name: RETRIEVE CREDENTIALS FROM AZURE KEY VAULT
   hosts: localhost
   connection: local
   gather_facts: no
-
   vars:
-    ansible_os_family: "RedHat"
+    azure_credential_name: "Azure Service Principal"
+    keyvault_name: "{{ lookup('env', 'KEYVAULT_NAME') | default('', true) }}"
     secret_names:
-      ad_username: "ad-username"
-      ad_password: "ad-password"
-      ad_domain: "ad-domain"
+      - "ansible-tower-license"
+      - "controller-admin-password"
+      - "automationhub-admin-password"
+      - "eda-admin-password"
+      - "automationgateway-admin-password"
+      - "postgresql-admin-password"
+      - "redis-admin-password"
+      - "controller-secret-key"
+      - "hub-secret-key"
+      - "eda-secret-key"
+      - "gateway-secret-key"
 
   tasks:
-    # ============================================
-    # AZURE KEY VAULT: Validate and retrieve secrets
-    # ============================================
-    - name: AZURE | Validate Azure credentials from AAP
-      ansible.builtin.assert:
-        that:
-          - azure_client_id is defined
-          - azure_client_secret is defined
-          - azure_tenant_id is defined
-          - azure_subscription_id is defined
-          - azure_keyvault_name is defined
-        fail_msg: |
-          ==========================================
-          ❌ AZURE CREDENTIALS MISSING ❌
-          ==========================================
-          Please ensure the 'Azure Service Principal' 
-          credential is attached to this job template.
-          
-          Required fields:
-          - azure_client_id
-          - azure_client_secret
-          - azure_tenant_id
-          - azure_subscription_id
-          - azure_keyvault_name
-          ==========================================
-        success_msg: "✓ Azure credentials validated from AAP"
-
-    - name: AZURE | Display Azure configuration (debug only)
+    - name: AZURE | Validate Azure credentials from AAP credential
       ansible.builtin.debug:
-        msg:
-          - "Azure Key Vault: {{ azure_keyvault_name }}"
-          - "Subscription ID: {{ azure_subscription_id[:8] }}****"
+        msg: "✓ Azure credentials validated"
+      changed_when: false
 
-    - name: AZURE | Retrieve AD username from Key Vault
-      azure.azcollection.azure_rm_keyvaultsecret_info:
-        vault_uri: "https://{{ azure_keyvault_name }}.vault.azure.net/"
-        name: "{{ secret_names.ad_username }}"
-        subscription_id: "{{ azure_subscription_id }}"
-        client_id: "{{ azure_client_id }}"
-        secret: "{{ azure_client_secret }}"
-        tenant: "{{ azure_tenant_id }}"
-      register: kv_username_result
-      no_log: true
+    - name: AZURE | Check if Azure CLI is installed
+      ansible.builtin.command: az --version
+      register: az_cli_check
       failed_when: false
+      changed_when: false
+      ignore_errors: yes
 
-    - name: AZURE | Retrieve AD password from Key Vault
-      azure.azcollection.azure_rm_keyvaultsecret_info:
-        vault_uri: "https://{{ azure_keyvault_name }}.vault.azure.net/"
-        name: "{{ secret_names.ad_password }}"
-        subscription_id: "{{ azure_subscription_id }}"
-        client_id: "{{ azure_client_id }}"
-        secret: "{{ azure_client_secret }}"
-        tenant: "{{ azure_tenant_id }}"
-      register: kv_password_result
-      no_log: true
-      failed_when: false
+    - name: AZURE | Install Azure CLI on RHEL
+      ansible.builtin.dnf:
+        name: azure-cli
+        state: present
+      when: az_cli_check.rc != 0
+      become: yes
+      register: az_cli_install
+      ignore_errors: yes
 
-    - name: AZURE | Retrieve AD domain from Key Vault
-      azure.azcollection.azure_rm_keyvaultsecret_info:
-        vault_uri: "https://{{ azure_keyvault_name }}.vault.azure.net/"
-        name: "{{ secret_names.ad_domain }}"
-        subscription_id: "{{ azure_subscription_id }}"
-        client_id: "{{ azure_client_id }}"
-        secret: "{{ azure_client_secret }}"
-        tenant: "{{ azure_tenant_id }}"
-      register: kv_domain_result
-      no_log: true
-      failed_when: false
+    - name: AZURE | Verify Azure CLI is available after installation
+      ansible.builtin.command: az --version
+      register: az_cli_verify
+      changed_when: false
+      when: az_cli_check.rc != 0
+      ignore_errors: yes
 
-    - name: AZURE | Check Key Vault secrets retrieval status - Username
+    - name: AZURE | Fail if Azure CLI not available
       ansible.builtin.fail:
         msg: |
           ==========================================
-          ❌ AZURE KEY VAULT SECRET RETRIEVAL FAILED ❌
+          ❌ AZURE CLI NOT AVAILABLE ❌
           ==========================================
-          Failed to retrieve secret: {{ secret_names.ad_username }}
+          Azure CLI is required for this playbook.
           
-          Error: {{ kv_username_result.msg | default('Unknown error') }}
+          Please install Azure CLI manually on the AAP runner:
+          sudo dnf install -y azure-cli
           
-          Please verify:
-          1. Secret '{{ secret_names.ad_username }}' exists in Key Vault
-          2. Service Principal has 'get' permission for secrets
-          3. Key Vault name is correct
+          Or visit: https://docs.microsoft.com/en-us/cli/azure/install-azure-cli
           ==========================================
-      when: kv_username_result.failed | default(false)
+      when: 
+        - az_cli_check.rc != 0
+        - az_cli_install is defined
+        - az_cli_install.failed is defined
+        - az_cli_install.failed == true
 
-    - name: AZURE | Check Key Vault secrets retrieval status - Password
-      ansible.builtin.fail:
-        msg: |
-          ==========================================
-          ❌ AZURE KEY VAULT SECRET RETRIEVAL FAILED ❌
-          ==========================================
-          Failed to retrieve secret: {{ secret_names.ad_password }}
-          
-          Error: {{ kv_password_result.msg | default('Unknown error') }}
-          
-          Please verify:
-          1. Secret '{{ secret_names.ad_password }}' exists in Key Vault
-          2. Service Principal has 'get' permission for secrets
-          3. Key Vault name is correct
-          ==========================================
-      when: kv_password_result.failed | default(false)
+    - name: AZURE | Login to Azure using service principal
+      ansible.builtin.shell: |
+        az login --service-principal \
+          --username "{{ lookup('ansible.builtin.credential', azure_credential_name, 'username') }}" \
+          --password "{{ lookup('ansible.builtin.credential', azure_credential_name, 'password') }}" \
+          --tenant "{{ lookup('ansible.builtin.credential', azure_credential_name, 'tenant') }}"
+      register: az_login
+      changed_when: false
+      no_log: true
+      when: keyvault_name != ""
 
-    - name: AZURE | Check Key Vault secrets retrieval status - Domain
-      ansible.builtin.fail:
-        msg: |
-          ==========================================
-          ❌ AZURE KEY VAULT SECRET RETRIEVAL FAILED ❌
-          ==========================================
-          Failed to retrieve secret: {{ secret_names.ad_domain }}
-          
-          Error: {{ kv_domain_result.msg | default('Unknown error') }}
-          
-          Please verify:
-          1. Secret '{{ secret_names.ad_domain }}' exists in Key Vault
-          2. Service Principal has 'get' permission for secrets
-          3. Key Vault name is correct
-          ==========================================
-      when: kv_domain_result.failed | default(false)
+    - name: AZURE | Set Azure subscription
+      ansible.builtin.shell: |
+        az account set --subscription "{{ lookup('ansible.builtin.credential', azure_credential_name, 'subscription') }}"
+      register: az_subscription
+      changed_when: false
+      when: keyvault_name != ""
 
-    - name: AZURE | Set credentials from Key Vault
+    - name: AZURE | Retrieve secrets from Key Vault
+      ansible.builtin.shell: |
+        az keyvault secret show \
+          --vault-name "{{ keyvault_name }}" \
+          --name "{{ item }}" \
+          --query value \
+          --output tsv
+      register: az_secret_result
+      loop: "{{ secret_names }}"
+      when: keyvault_name != ""
+      changed_when: false
+      ignore_errors: yes
+      no_log: true
+
+    - name: AZURE | Set facts from retrieved secrets
       ansible.builtin.set_fact:
-        ad_username: "{{ kv_username_result.secrets[0].value }}"
-        ad_password: "{{ kv_password_result.secrets[0].value }}"
-        domain_name: "{{ kv_domain_result.secrets[0].value }}"
-        ansible_user: "{{ kv_username_result.secrets[0].value }}"
-        ansible_password: "{{ kv_password_result.secrets[0].value }}"
-      no_log: false
-      when:
-        - not kv_username_result.failed | default(false)
-        - not kv_password_result.failed | default(false)
-        - not kv_domain_result.failed | default(false)
+        "{{ item.item | replace('-', '_') }}": "{{ item.stdout }}"
+      loop: "{{ az_secret_result.results }}"
+      when: 
+        - keyvault_name != ""
+        - item.stdout is defined
+        - item.stdout != ""
 
-    - name: AZURE | Debug credentials status
+    - name: AZURE | Debug retrieved secrets (excluding passwords)
       ansible.builtin.debug:
-        msg:
-          - "✓ Azure Key Vault '{{ azure_keyvault_name }}' connected successfully"
-          - "✓ AD Username: {{ ad_username }}"
-          - "✓ AD Domain: {{ domain_name }}"
-      when:
-        - ad_username is defined
-        - ad_password is defined
-        - domain_name is defined
+        msg: |
+          ✓ Retrieved secrets from Key Vault: {{ keyvault_name }}
+          - License: {{ ansible_tower_license | default('NOT FOUND') | truncate(50) }}
+          - Controller Admin Password: {{ 'SET' if controller_admin_password is defined else 'NOT FOUND' }}
+          - Hub Admin Password: {{ 'SET' if automationhub_admin_password is defined else 'NOT FOUND' }}
+          - EDA Admin Password: {{ 'SET' if eda_admin_password is defined else 'NOT FOUND' }}
+          - Gateway Admin Password: {{ 'SET' if automationgateway_admin_password is defined else 'NOT FOUND' }}
+          - PostgreSQL Admin Password: {{ 'SET' if postgresql_admin_password is defined else 'NOT FOUND' }}
+          - Redis Admin Password: {{ 'SET' if redis_admin_password is defined else 'NOT FOUND' }}
+          - Controller Secret Key: {{ 'SET' if controller_secret_key is defined else 'NOT FOUND' }}
+          - Hub Secret Key: {{ 'SET' if hub_secret_key is defined else 'NOT FOUND' }}
+          - EDA Secret Key: {{ 'SET' if eda_secret_key is defined else 'NOT FOUND' }}
+          - Gateway Secret Key: {{ 'SET' if gateway_secret_key is defined else 'NOT FOUND' }}
+      when: keyvault_name != ""
+      changed_when: false
 
-    - name: AZURE | Create credential file for use in next play
+    - name: AZURE | Generate inventory file with retrieved secrets
       ansible.builtin.copy:
+        dest: /tmp/aap_inventory.yml
         content: |
-          ansible_user: {{ ad_username }}
-          ansible_password: {{ ad_password }}
-          domain_name: {{ domain_name }}
-          ad_username: {{ ad_username }}
-          ad_password: {{ ad_password }}
-        dest: "/tmp/ad_credentials.yml"
-        mode: '0600'
-      run_once: true
-      when:
-        - ad_username is defined
-        - ad_password is defined
-        - domain_name is defined
+          ---
+          all:
+            children:
+              automationcontroller:
+                hosts:
+                  controller.example.com:
+                    ansible_host: controller.example.com
+                    ansible_user: admin
+                    ansible_ssh_private_key_file: /home/admin/.ssh/id_rsa
+                    controller_admin_password: "{{ controller_admin_password | default('') }}"
+                    controller_secret_key: "{{ controller_secret_key | default('') }}"
+              
+              execution_nodes:
+                hosts:
+                  execution.example.com:
+                    ansible_host: execution.example.com
+                    ansible_user: admin
+                    ansible_ssh_private_key_file: /home/admin/.ssh/id_rsa
+              
+              database:
+                hosts:
+                  db.example.com:
+                    ansible_host: db.example.com
+                    ansible_user: admin
+                    ansible_ssh_private_key_file: /home/admin/.ssh/id_rsa
+                    postgresql_admin_password: "{{ postgresql_admin_password | default('') }}"
+              
+              automationhub:
+                hosts:
+                  hub.example.com:
+                    ansible_host: hub.example.com
+                    ansible_user: admin
+                    ansible_ssh_private_key_file: /home/admin/.ssh/id_rsa
+                    automationhub_admin_password: "{{ automationhub_admin_password | default('') }}"
+                    hub_secret_key: "{{ hub_secret_key | default('') }}"
+              
+              automationgateway:
+                hosts:
+                  controller.example.com:
+                    ansible_host: controller.example.com
+                    ansible_user: admin
+                    ansible_ssh_private_key_file: /home/admin/.ssh/id_rsa
+                    automationgateway_admin_password: "{{ automationgateway_admin_password | default('') }}"
+                    gateway_secret_key: "{{ gateway_secret_key | default('') }}"
+              
+              eda:
+                hosts:
+                  controller.example.com:
+                    ansible_host: controller.example.com
+                    ansible_user: admin
+                    ansible_ssh_private_key_file: /home/admin/.ssh/id_rsa
+                    eda_admin_password: "{{ eda_admin_password | default('') }}"
+                    eda_secret_key: "{{ eda_secret_key | default('') }}"
+              
+              all:
+                vars:
+                  ansible_python_interpreter: /usr/bin/python3
+                  ansible_become: true
+                  ansible_become_method: sudo
+      when: 
+        - keyvault_name != ""
+        - controller_admin_password is defined
+        - automationhub_admin_password is defined
 
-# ============================================
-# Play 2: Main AD Onboarding
-# ============================================
-- name: ENTERPRISE ACTIVE DIRECTORY ONBOARDING WITH AZURE KEY VAULT
-  hosts: domain_controllers
-  gather_facts: yes
-  gather_subset:
-    - min
-
-  become: true
-  become_method: runas
-  become_user: SYSTEM
-
-  vars_files:
-    - /tmp/ad_credentials.yml
-
-  vars:
-    # Enterprise settings
-    enable_dry_run: false
-    ad_retries: 3
-    ad_delay: 5
-
-    # Operation tracking
-    operation_id: "{{ lookup('password', '/dev/null length=12 chars=hex') | upper }}"
-    operation_start_time: "{{ ansible_date_time.epoch }}"
-
-    # Validation patterns
-    server_name_pattern: '^[A-Za-z][A-Za-z0-9-]{2,14}$'
-    app_name_pattern: '^[A-Za-z][A-Za-z0-9_]{2,30}$'
-    domain_name_pattern: '^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-
-    # Base OU path
-    ou_base_dn: "DC={{ domain_name.replace('.', ',DC=') }}"
-
-    # Connection settings
-    ansible_user: "{{ ansible_user }}"
-    ansible_password: "{{ ansible_password }}"
-    ansible_connection: winrm
-    ansible_winrm_transport: ntlm
-    ansible_winrm_server_cert_validation: ignore
-    ansible_port: 5985
-    ansible_winrm_scheme: http
-    ansible_winrm_operation_timeout_sec: 60
-    ansible_winrm_read_timeout_sec: 120
-
-  pre_tasks:
-    - name: CONNECTION | Test connectivity to domain controller
-      ansible.windows.win_ping:
-      register: ping_test
-      until: ping_test is success
-      retries: "{{ ad_retries }}"
-      delay: "{{ ad_delay }}"
-
-    - name: CONNECTION | Verify Active Directory module
-      ansible.windows.win_shell: |
-        Import-Module ActiveDirectory -ErrorAction Stop
-        Get-ADDomain | Select-Object DNSRoot
-      register: ad_verify
-      until: ad_verify is success
-      retries: "{{ ad_retries }}"
-      delay: "{{ ad_delay }}"
-      no_log: true
-
-    - name: PRE-TASKS | Set server type and target OU
-      ansible.builtin.set_fact:
-        server_type: "{{ 'SQL' if 'SQL' in server_name | upper else 'NON-SQL' }}"
-        target_ou_dn: >-
-          {{
-            ('OU=' + application_name + ',OU=SQL,OU=Servers,OU=LKM,' + ou_base_dn)
-            if ('SQL' in server_name | upper)
-            else ('OU=' + application_name + ',OU=Servers,OU=LKM,' + ou_base_dn)
-          }}
-        app_prefix: "{{ application_name[:3] | upper }}"
-        ad_group_name: "{{ application_name[:3] | upper }}-PAM-{{ application_name }}{{ 'SQL' if ('SQL' in server_name | upper) else '' }}"
-        gpo_name: "{{ application_name[:3] | upper }}-SRV-{{ application_name }}{{ 'SQL' if ('SQL' in server_name | upper) else '' }}"
-      when: server_name is defined
-
-  tasks:
-    - name: MAIN | Execute AD onboarding
-      block:
-        - name: Include validation role
-          ansible.builtin.include_role:
-            name: ad_validation
-
-        - name: Include computer management - Check Only
-          ansible.builtin.include_role:
-            name: ad_computer_management
-            tasks_from: check_server
-
-        - name: Include OU management role
-          ansible.builtin.include_role:
-            name: ad_ou_management
-
-        - name: Include computer management - Move Server
-          ansible.builtin.include_role:
-            name: ad_computer_management
-            tasks_from: move_server
-
-        - name: Include group management role
-          ansible.builtin.include_role:
-            name: ad_group_management
-
-        - name: Include GPO management role
-          ansible.builtin.include_role:
-            name: ad_gpo_management
-
-        - name: Include restricted groups role
-          ansible.builtin.include_role:
-            name: ad_restricted_groups
-
-        - name: Include reporting role
-          ansible.builtin.include_role:
-            name: ad_reporting
-
-      rescue:
-        - name: ERROR | Display failure
-          ansible.builtin.debug:
-            msg: "❌ AD ONBOARDING FAILED for {{ server_name }}"
-
-        - name: ERROR | Re-raise failure
-          ansible.builtin.fail:
-            msg: "AD Onboarding failed for {{ server_name }}"
-
-  post_tasks:
-    - name: CLEANUP | Remove temporary credentials file
+    - name: AZURE | Create AAP installation directory
       ansible.builtin.file:
-        path: "/tmp/ad_credentials.yml"
+        path: /home/admin/aap
+        state: directory
+        owner: admin
+        group: admin
+        mode: '0755'
+      when: 
+        - keyvault_name != ""
+        - controller_admin_password is defined
+
+    - name: AZURE | Copy inventory file to AAP directory
+      ansible.builtin.copy:
+        src: /tmp/aap_inventory.yml
+        dest: /home/admin/aap/inventory.yml
+        owner: admin
+        group: admin
+        mode: '0644'
+      when: 
+        - keyvault_name != ""
+        - controller_admin_password is defined
+
+    - name: AZURE | Clean up temporary inventory file
+      ansible.builtin.file:
+        path: /tmp/aap_inventory.yml
         state: absent
-      delegate_to: localhost
-      run_once: true
-      when: not enable_dry_run | bool
+      when: 
+        - keyvault_name != ""
+        - controller_admin_password is defined
+
+    - name: AZURE | Display success message
+      ansible.builtin.debug:
+        msg: |
+          ==========================================
+          ✅ AZURE KEY VAULT RETRIEVAL COMPLETE ✅
+          ==========================================
+          
+          Secrets have been retrieved from Azure Key Vault: {{ keyvault_name }}
+          
+          Inventory file created at: /home/admin/aap/inventory.yml
+          
+          To deploy AAP:
+          cd /home/admin/aap
+          ansible-playbook -i inventory.yml ansible.containerized_installer.install
+          
+          ==========================================
+      when: keyvault_name != ""
+      changed_when: false
+
+    - name: AZURE | Fail if Key Vault name not provided
+      ansible.builtin.fail:
+        msg: |
+          ==========================================
+          ❌ KEY VAULT NAME NOT PROVIDED ❌
+          ==========================================
+          
+          Please set the KEYVAULT_NAME environment variable:
+          export KEYVAULT_NAME=your-keyvault-name
+          
+          Or pass it directly:
+          ansible-playbook -e KEYVAULT_NAME=your-keyvault-name ad-onboarding.yml
+          ==========================================
+      when: keyvault_name == ""
+      ignore_errors: no
+
+    - name: AZURE | Logout from Azure
+      ansible.builtin.shell: az logout
+      register: az_logout
+      changed_when: false
+      when: keyvault_name != ""
+      ignore_errors: yes
