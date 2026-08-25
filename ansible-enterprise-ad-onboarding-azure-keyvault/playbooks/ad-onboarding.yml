@@ -3,7 +3,7 @@
 - name: RETRIEVE CREDENTIALS FROM AZURE KEY VAULT
   hosts: localhost
   connection: local
-  gather_facts: no
+  gather_facts: yes
 
   vars:
     # Variables will be injected from AAP Credential
