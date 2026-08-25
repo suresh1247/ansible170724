@@ -3,13 +3,10 @@
 - name: RETRIEVE CREDENTIALS FROM AZURE KEY VAULT
   hosts: localhost
   connection: local
-  gather_facts: yes
+  gather_facts: no
 
   vars:
-    # Variables will be injected from AAP Credential
-    # azure_client_id, azure_client_secret, azure_tenant_id,
-    # azure_subscription_id, azure_keyvault_name
-    # Secret names in Key Vault
+    ansible_os_family: "RedHat"
     secret_names:
       ad_username: "ad-username"
       ad_password: "ad-password"
