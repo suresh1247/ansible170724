@@ -2,7 +2,7 @@
 - name: RETRIEVE CREDENTIALS FROM AZURE KEY VAULT
   hosts: localhost
   connection: local
-  gather_facts: no
+  gather_facts: yes
   vars:
     azure_credential_name: "Azure Service Principal"
     keyvault_name: "{{ lookup('env', 'KEYVAULT_NAME') | default('', true) }}"
@@ -26,117 +26,75 @@
         msg: "✓ Azure credentials validated"
       changed_when: false
 
-    - name: AZURE | Check if Azure CLI is installed with error handling
+    - name: AZURE | Check if azure.azcollection is available
       ansible.builtin.shell: |
-        az --version 2>/dev/null || echo "AZURE_CLI_NOT_FOUND"
-      register: az_cli_check
-      failed_when: false
+        ansible-galaxy collection list | grep azure.azcollection || echo "NOT_FOUND"
+      register: collection_check
       changed_when: false
       ignore_errors: yes
 
-    - name: AZURE | Install Azure CLI on RHEL
-      ansible.builtin.dnf:
-        name: azure-cli
+    - name: AZURE | Install azure.azcollection if not present
+      ansible.builtin.shell: |
+        ansible-galaxy collection install azure.azcollection --force
+      when: collection_check.stdout is defined and "NOT_FOUND" in collection_check.stdout
+      ignore_errors: yes
+      register: collection_install
+
+    - name: AZURE | Install Azure Python SDK
+      ansible.builtin.pip:
+        name:
+          - azure-core==1.29.5
+          - azure-identity==1.15.0
+          - azure-keyvault-secrets==4.7.0
+          - azure-mgmt-keyvault==10.2.3
+          - azure-mgmt-resource==23.1.1
+          - msrestazure==0.6.4
         state: present
-      when: 
-        - az_cli_check is defined
-        - az_cli_check.stdout is defined
-        - '"AZURE_CLI_NOT_FOUND" in az_cli_check.stdout or az_cli_check.rc is defined and az_cli_check.rc != 0'
-      become: yes
-      register: az_cli_install
       ignore_errors: yes
+      register: pip_install
 
-    - name: AZURE | Verify Azure CLI is available after installation
-      ansible.builtin.shell: |
-        az --version 2>/dev/null || echo "AZURE_CLI_NOT_FOUND"
-      register: az_cli_verify
-      changed_when: false
-      when: 
-        - az_cli_check is defined
-        - az_cli_check.stdout is defined
-        - '"AZURE_CLI_NOT_FOUND" in az_cli_check.stdout or az_cli_check.rc is defined and az_cli_check.rc != 0'
-      ignore_errors: yes
-      failed_when: false
-
-    - name: AZURE | Set fact for Azure CLI availability
+    - name: AZURE | Get Azure credentials from AAP credential
       ansible.builtin.set_fact:
-        azure_cli_available: "{{ 
-          (az_cli_check is defined and az_cli_check.stdout is defined and 'AZURE_CLI_NOT_FOUND' not in az_cli_check.stdout) or 
-          (az_cli_verify is defined and az_cli_verify.stdout is defined and 'AZURE_CLI_NOT_FOUND' not in az_cli_verify.stdout) 
-        }}"
-
-    - name: AZURE | Fail if Azure CLI not available
-      ansible.builtin.fail:
-        msg: |
-          ==========================================
-          ❌ AZURE CLI NOT AVAILABLE ❌
-          ==========================================
-          Azure CLI is required for this playbook.
-          
-          Please install Azure CLI manually on the AAP runner:
-          sudo dnf install -y azure-cli
-          
-          Or visit: https://docs.microsoft.com/en-us/cli/azure/install-azure-cli
-          ==========================================
-      when: 
-        - azure_cli_available is defined
-        - not azure_cli_available
+        azure_subscription_id: "{{ lookup('ansible.builtin.credential', azure_credential_name, 'subscription') | default('') }}"
+        azure_tenant_id: "{{ lookup('ansible.builtin.credential', azure_credential_name, 'tenant') | default('') }}"
+        azure_client_id: "{{ lookup('ansible.builtin.credential', azure_credential_name, 'username') | default('') }}"
+        azure_client_secret: "{{ lookup('ansible.builtin.credential', azure_credential_name, 'password') | default('') }}"
+      no_log: true
 
     - name: AZURE | Login to Azure using service principal
-      ansible.builtin.shell: |
-        az login --service-principal \
-          --username "{{ lookup('ansible.builtin.credential', azure_credential_name, 'username') }}" \
-          --password "{{ lookup('ansible.builtin.credential', azure_credential_name, 'password') }}" \
-          --tenant "{{ lookup('ansible.builtin.credential', azure_credential_name, 'tenant') }}"
+      azure.azcollection.azure_rm_auth:
+        subscription_id: "{{ azure_subscription_id }}"
+        tenant: "{{ azure_tenant_id }}"
+        client_id: "{{ azure_client_id }}"
+        secret: "{{ azure_client_secret }}"
       register: az_login
-      changed_when: false
+      when: keyvault_name != ""
       no_log: true
-      when: 
-        - keyvault_name != ""
-        - azure_cli_available is defined
-        - azure_cli_available
-
-    - name: AZURE | Set Azure subscription
-      ansible.builtin.shell: |
-        az account set --subscription "{{ lookup('ansible.builtin.credential', azure_credential_name, 'subscription') }}"
-      register: az_subscription
-      changed_when: false
-      when: 
-        - keyvault_name != ""
-        - azure_cli_available is defined
-        - azure_cli_available
 
     - name: AZURE | Retrieve secrets from Key Vault
-      ansible.builtin.shell: |
-        az keyvault secret show \
-          --vault-name "{{ keyvault_name }}" \
-          --name "{{ item }}" \
-          --query value \
-          --output tsv
-      register: az_secret_result
+      azure.azcollection.azure_rm_keyvault_secret_info:
+        keyvault_uri: "https://{{ keyvault_name }}.vault.azure.net/"
+        secret_name: "{{ item }}"
       loop: "{{ secret_names }}"
-      when: 
-        - keyvault_name != ""
-        - azure_cli_available is defined
-        - azure_cli_available
-      changed_when: false
+      register: az_secret_result
+      when: keyvault_name != ""
       ignore_errors: yes
       no_log: true
+      failed_when: false
 
     - name: AZURE | Set facts from retrieved secrets
       ansible.builtin.set_fact:
-        "{{ item.item | replace('-', '_') }}": "{{ item.stdout }}"
+        "{{ item.item | replace('-', '_') }}": "{{ item.secret }}"
       loop: "{{ az_secret_result.results }}"
       when: 
         - keyvault_name != ""
-        - azure_cli_available is defined
-        - azure_cli_available
         - item is defined
         - item.item is defined
-        - item.stdout is defined
-        - item.stdout != ""
+        - item.secret is defined
+        - item.secret != ""
+        - item.failed is not defined or not item.failed
 
-    - name: AZURE | Debug retrieved secrets (excluding passwords)
+    - name: AZURE | Debug retrieved secrets
       ansible.builtin.debug:
         msg: |
           ✓ Retrieved secrets from Key Vault: {{ keyvault_name }}
@@ -151,10 +109,7 @@
           - Hub Secret Key: {{ 'SET' if hub_secret_key is defined else 'NOT FOUND' }}
           - EDA Secret Key: {{ 'SET' if eda_secret_key is defined else 'NOT FOUND' }}
           - Gateway Secret Key: {{ 'SET' if gateway_secret_key is defined else 'NOT FOUND' }}
-      when: 
-        - keyvault_name != ""
-        - azure_cli_available is defined
-        - azure_cli_available
+      when: keyvault_name != ""
       changed_when: false
 
     - name: AZURE | Generate inventory file with retrieved secrets
@@ -222,8 +177,6 @@
                   ansible_become_method: sudo
       when: 
         - keyvault_name != ""
-        - azure_cli_available is defined
-        - azure_cli_available
         - controller_admin_password is defined
         - automationhub_admin_password is defined
 
@@ -236,8 +189,6 @@
         mode: '0755'
       when: 
         - keyvault_name != ""
-        - azure_cli_available is defined
-        - azure_cli_available
         - controller_admin_password is defined
 
     - name: AZURE | Copy inventory file to AAP directory
@@ -249,8 +200,6 @@
         mode: '0644'
       when: 
         - keyvault_name != ""
-        - azure_cli_available is defined
-        - azure_cli_available
         - controller_admin_password is defined
 
     - name: AZURE | Clean up temporary inventory file
@@ -259,8 +208,6 @@
         state: absent
       when: 
         - keyvault_name != ""
-        - azure_cli_available is defined
-        - azure_cli_available
         - controller_admin_password is defined
 
     - name: AZURE | Display success message
@@ -270,19 +217,14 @@
           ✅ AZURE KEY VAULT RETRIEVAL COMPLETE ✅
           ==========================================
           
-          Secrets have been retrieved from Azure Key Vault: {{ keyvault_name }}
-          
+          Secrets retrieved from Azure Key Vault: {{ keyvault_name }}
           Inventory file created at: /home/admin/aap/inventory.yml
           
           To deploy AAP:
           cd /home/admin/aap
           ansible-playbook -i inventory.yml ansible.containerized_installer.install
-          
           ==========================================
-      when: 
-        - keyvault_name != ""
-        - azure_cli_available is defined
-        - azure_cli_available
+      when: keyvault_name != ""
       changed_when: false
 
     - name: AZURE | Fail if Key Vault name not provided
@@ -292,20 +234,27 @@
           ❌ KEY VAULT NAME NOT PROVIDED ❌
           ==========================================
           
-          Please set the KEYVAULT_NAME environment variable:
-          export KEYVAULT_NAME=your-keyvault-name
-          
-          Or pass it directly:
-          ansible-playbook -e KEYVAULT_NAME=your-keyvault-name ad-onboarding.yml
+          Set KEYVAULT_NAME as extra variable in AAP:
+          KEYVAULT_NAME: your-keyvault-name
           ==========================================
       when: keyvault_name == ""
 
-    - name: AZURE | Logout from Azure
-      ansible.builtin.shell: az logout
-      register: az_logout
-      changed_when: false
+    - name: AZURE | Fail if secrets not retrieved
+      ansible.builtin.fail:
+        msg: |
+          ==========================================
+          ❌ SECRETS RETRIEVAL FAILED ❌
+          ==========================================
+          Could not retrieve secrets from Azure Key Vault: {{ keyvault_name }}
+          
+          Verify:
+          1. Key Vault name is correct
+          2. Service Principal has 'Key Vault Secrets User' role
+          3. Secrets exist with exact names
+          4. azure.azcollection is installed
+          ==========================================
       when: 
         - keyvault_name != ""
-        - azure_cli_available is defined
-        - azure_cli_available
-      ignore_errors: yes
+        - controller_admin_password is not defined
+        - automationhub_admin_password is not defined
+      ignore_errors: no

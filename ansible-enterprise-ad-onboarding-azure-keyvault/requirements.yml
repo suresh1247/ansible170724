@@ -10,3 +10,6 @@ collections:
     version: ">=2.0.0"
   - name: ansible.posix
     version: ">=1.5.0"
+
+# Also install Azure Python SDK dependencies
+# These will be installed via pip requirements

@@ -1,0 +1,12 @@
+# Azure SDK for Python - Required for azure.azcollection
+azure-core==1.29.5
+azure-identity==1.15.0
+azure-keyvault-secrets==4.7.0
+azure-mgmt-keyvault==10.2.3
+azure-mgmt-resource==23.1.1
+azure-mgmt-msi==7.0.0
+azure-mgmt-authorization==4.0.0
+azure-mgmt-storage==21.1.0
+azure-mgmt-network==25.2.0
+azure-mgmt-compute==30.5.0
+msrestazure==0.6.4

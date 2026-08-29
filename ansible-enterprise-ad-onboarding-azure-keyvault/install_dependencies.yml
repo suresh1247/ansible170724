@@ -1,0 +1,29 @@
+---
+- name: Install Azure Collection Dependencies
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+  become: yes
+  tasks:
+    - name: Install Azure Python SDK dependencies
+      ansible.builtin.pip:
+        requirements: azure_requirements.txt
+        state: present
+      register: pip_result
+      ignore_errors: yes
+
+    - name: Install azure.azcollection via ansible-galaxy
+      ansible.builtin.shell: |
+        ansible-galaxy collection install azure.azcollection --force
+      register: galaxy_result
+      ignore_errors: yes
+
+    - name: Display installation status
+      ansible.builtin.debug:
+        msg: |
+          ==========================================
+          Azure Collection Dependencies Status
+          ==========================================
+          Python Packages: {{ 'INSTALLED' if not pip_result.failed else 'FAILED' }}
+          Ansible Collection: {{ 'INSTALLED' if not galaxy_result.failed else 'FAILED' }}
+          ==========================================
