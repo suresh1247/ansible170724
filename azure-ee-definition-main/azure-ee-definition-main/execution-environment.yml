@@ -1,0 +1,17 @@
+---
+version: 1
+build_arg_defaults:
+  EE_BASE_IMAGE: 'registry.redhat.io/ansible-automation-platform-27/ee-minimal-rhel10:latest'
+  EE_BUILDER_IMAGE: 'registry.redhat.io/ansible-automation-platform-27/ansible-builder-rhel10:latest'
+
+dependencies:
+  galaxy: requirements.yml
+  python: requirements.txt
+  system: bindep.txt
+
+additional_build_steps:
+  prepend: |
+    RUN pip3 install --upgrade pip setuptools wheel
+  append: |
+    RUN ansible-galaxy collection install azure.azcollection --force
+    RUN pip3 install azure-core azure-identity azure-keyvault-secrets azure-mgmt-keyvault azure-mgmt-resource azure-mgmt-msi azure-mgmt-authorization azure-mgmt-storage azure-mgmt-network azure-mgmt-compute msrestazure
