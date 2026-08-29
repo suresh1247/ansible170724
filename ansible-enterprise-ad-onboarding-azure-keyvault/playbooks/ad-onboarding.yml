@@ -18,6 +18,7 @@
       - "hub-secret-key"
       - "eda-secret-key"
       - "gateway-secret-key"
+    enable_dry_run: false
 
   tasks:
     - name: AZURE | Validate Azure credentials from AAP credential
@@ -25,8 +26,9 @@
         msg: "✓ Azure credentials validated"
       changed_when: false
 
-    - name: AZURE | Check if Azure CLI is installed
-      ansible.builtin.command: az --version
+    - name: AZURE | Check if Azure CLI is installed with error handling
+      ansible.builtin.shell: |
+        az --version 2>/dev/null || echo "AZURE_CLI_NOT_FOUND"
       register: az_cli_check
       failed_when: false
       changed_when: false
@@ -36,17 +38,32 @@
       ansible.builtin.dnf:
         name: azure-cli
         state: present
-      when: az_cli_check.rc != 0
+      when: 
+        - az_cli_check is defined
+        - az_cli_check.stdout is defined
+        - '"AZURE_CLI_NOT_FOUND" in az_cli_check.stdout or az_cli_check.rc is defined and az_cli_check.rc != 0'
       become: yes
       register: az_cli_install
       ignore_errors: yes
 
     - name: AZURE | Verify Azure CLI is available after installation
-      ansible.builtin.command: az --version
+      ansible.builtin.shell: |
+        az --version 2>/dev/null || echo "AZURE_CLI_NOT_FOUND"
       register: az_cli_verify
       changed_when: false
-      when: az_cli_check.rc != 0
+      when: 
+        - az_cli_check is defined
+        - az_cli_check.stdout is defined
+        - '"AZURE_CLI_NOT_FOUND" in az_cli_check.stdout or az_cli_check.rc is defined and az_cli_check.rc != 0'
       ignore_errors: yes
+      failed_when: false
+
+    - name: AZURE | Set fact for Azure CLI availability
+      ansible.builtin.set_fact:
+        azure_cli_available: "{{ 
+          (az_cli_check is defined and az_cli_check.stdout is defined and 'AZURE_CLI_NOT_FOUND' not in az_cli_check.stdout) or 
+          (az_cli_verify is defined and az_cli_verify.stdout is defined and 'AZURE_CLI_NOT_FOUND' not in az_cli_verify.stdout) 
+        }}"
 
     - name: AZURE | Fail if Azure CLI not available
       ansible.builtin.fail:
@@ -62,10 +79,8 @@
           Or visit: https://docs.microsoft.com/en-us/cli/azure/install-azure-cli
           ==========================================
       when: 
-        - az_cli_check.rc != 0
-        - az_cli_install is defined
-        - az_cli_install.failed is defined
-        - az_cli_install.failed == true
+        - azure_cli_available is defined
+        - not azure_cli_available
 
     - name: AZURE | Login to Azure using service principal
       ansible.builtin.shell: |
@@ -76,14 +91,20 @@
       register: az_login
       changed_when: false
       no_log: true
-      when: keyvault_name != ""
+      when: 
+        - keyvault_name != ""
+        - azure_cli_available is defined
+        - azure_cli_available
 
     - name: AZURE | Set Azure subscription
       ansible.builtin.shell: |
         az account set --subscription "{{ lookup('ansible.builtin.credential', azure_credential_name, 'subscription') }}"
       register: az_subscription
       changed_when: false
-      when: keyvault_name != ""
+      when: 
+        - keyvault_name != ""
+        - azure_cli_available is defined
+        - azure_cli_available
 
     - name: AZURE | Retrieve secrets from Key Vault
       ansible.builtin.shell: |
@@ -94,7 +115,10 @@
           --output tsv
       register: az_secret_result
       loop: "{{ secret_names }}"
-      when: keyvault_name != ""
+      when: 
+        - keyvault_name != ""
+        - azure_cli_available is defined
+        - azure_cli_available
       changed_when: false
       ignore_errors: yes
       no_log: true
@@ -105,6 +129,10 @@
       loop: "{{ az_secret_result.results }}"
       when: 
         - keyvault_name != ""
+        - azure_cli_available is defined
+        - azure_cli_available
+        - item is defined
+        - item.item is defined
         - item.stdout is defined
         - item.stdout != ""
 
@@ -123,7 +151,10 @@
           - Hub Secret Key: {{ 'SET' if hub_secret_key is defined else 'NOT FOUND' }}
           - EDA Secret Key: {{ 'SET' if eda_secret_key is defined else 'NOT FOUND' }}
           - Gateway Secret Key: {{ 'SET' if gateway_secret_key is defined else 'NOT FOUND' }}
-      when: keyvault_name != ""
+      when: 
+        - keyvault_name != ""
+        - azure_cli_available is defined
+        - azure_cli_available
       changed_when: false
 
     - name: AZURE | Generate inventory file with retrieved secrets
@@ -191,6 +222,8 @@
                   ansible_become_method: sudo
       when: 
         - keyvault_name != ""
+        - azure_cli_available is defined
+        - azure_cli_available
         - controller_admin_password is defined
         - automationhub_admin_password is defined
 
@@ -203,6 +236,8 @@
         mode: '0755'
       when: 
         - keyvault_name != ""
+        - azure_cli_available is defined
+        - azure_cli_available
         - controller_admin_password is defined
 
     - name: AZURE | Copy inventory file to AAP directory
@@ -214,6 +249,8 @@
         mode: '0644'
       when: 
         - keyvault_name != ""
+        - azure_cli_available is defined
+        - azure_cli_available
         - controller_admin_password is defined
 
     - name: AZURE | Clean up temporary inventory file
@@ -222,6 +259,8 @@
         state: absent
       when: 
         - keyvault_name != ""
+        - azure_cli_available is defined
+        - azure_cli_available
         - controller_admin_password is defined
 
     - name: AZURE | Display success message
@@ -240,7 +279,10 @@
           ansible-playbook -i inventory.yml ansible.containerized_installer.install
           
           ==========================================
-      when: keyvault_name != ""
+      when: 
+        - keyvault_name != ""
+        - azure_cli_available is defined
+        - azure_cli_available
       changed_when: false
 
     - name: AZURE | Fail if Key Vault name not provided
@@ -257,11 +299,13 @@
           ansible-playbook -e KEYVAULT_NAME=your-keyvault-name ad-onboarding.yml
           ==========================================
       when: keyvault_name == ""
-      ignore_errors: no
 
     - name: AZURE | Logout from Azure
       ansible.builtin.shell: az logout
       register: az_logout
       changed_when: false
-      when: keyvault_name != ""
+      when: 
+        - keyvault_name != ""
+        - azure_cli_available is defined
+        - azure_cli_available
       ignore_errors: yes
