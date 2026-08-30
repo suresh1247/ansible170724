@@ -1,4 +1,7 @@
 ---
+# Role: ad_gpo_management
+# Purpose: Create and link GPOs
+
 - name: GPO | Check if GPO exists
   ansible.windows.win_shell: |
     Import-Module GroupPolicy -ErrorAction SilentlyContinue
@@ -15,15 +18,29 @@
   register: gpo_create
   when: 
     - not enable_dry_run | bool
+    - gpo_check is defined
+    - gpo_check.stdout is defined
     - gpo_check.stdout == "GPO_NOT_EXISTS"
 
 - name: GPO | Set creation fact
   ansible.builtin.set_fact:
     gpo_creation:
-      stdout: "{{ 'CREATED' if gpo_create is defined and gpo_create.stdout == 'GPO_CREATED' else 'EXISTS' }}"
+      stdout: "EXISTS"
   when: 
     - not enable_dry_run | bool
     - gpo_check is defined
+    - gpo_check.stdout is defined
+    - gpo_check.stdout == "GPO_EXISTS"
+
+- name: GPO | Set creation fact for new GPO
+  ansible.builtin.set_fact:
+    gpo_creation:
+      stdout: "CREATED"
+  when: 
+    - not enable_dry_run | bool
+    - gpo_create is defined
+    - gpo_create.stdout is defined
+    - gpo_create.stdout == "GPO_CREATED"
 
 - name: GPO | Link GPO to target OU
   ansible.windows.win_shell: |
@@ -42,12 +59,22 @@
   when: 
     - not enable_dry_run | bool
     - gpo_check is defined
+    - gpo_check.stdout is defined
     - gpo_check.stdout == "GPO_EXISTS" or (gpo_create is defined and gpo_create.stdout == "GPO_CREATED")
 
 - name: GPO | Set link fact
   ansible.builtin.set_fact:
     gpo_link:
-      stdout: "{{ gpo_link_result.stdout | default('ALREADY_LINKED') }}"
+      stdout: "ALREADY_LINKED"
+  when: 
+    - not enable_dry_run | bool
+    - gpo_link_result is not defined
+
+- name: GPO | Set link fact from result
+  ansible.builtin.set_fact:
+    gpo_link:
+      stdout: "{{ gpo_link_result.stdout }}"
   when: 
     - not enable_dry_run | bool
     - gpo_link_result is defined
+    - gpo_link_result.stdout is defined
