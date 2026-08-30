@@ -1,7 +1,7 @@
 ---
 - name: ENTERPRISE ACTIVE DIRECTORY ONBOARDING
   hosts: domain_controllers
-  gather_facts: no  # Disable automatic fact gathering
+  gather_facts: no
   connection: winrm
   become: true
   become_method: runas
@@ -19,8 +19,10 @@
     ansible_become_method: runas
     ansible_become_user: SYSTEM
     
-    # Azure Key Vault Configuration
-    keyvault_name: "{{ lookup('env', 'KEYVAULT_NAME') | default(KEYVAULT_NAME | default('')) }}"
+    # Azure Key Vault Configuration - Try multiple sources
+    keyvault_name_from_env: "{{ lookup('env', 'KEYVAULT_NAME') | default('') }}"
+    keyvault_name_from_var: "{{ KEYVAULT_NAME | default('') }}"
+    keyvault_name: "{{ keyvault_name_from_var if keyvault_name_from_var != '' else keyvault_name_from_env }}"
     azure_rest_api_version: "7.0"
     
     # Set default values
@@ -64,6 +66,7 @@
           Target Host: {{ inventory_hostname }}
           WinRM Port: {{ ansible_port }}
           Transport: {{ ansible_winrm_transport }}
+          KEYVAULT_NAME: {{ keyvault_name | default('NOT SET') }}
           ==========================================
       delegate_to: localhost
       run_once: true
@@ -75,14 +78,20 @@
           ❌ KEY VAULT NAME NOT PROVIDED ❌
           ==========================================
           
+          KEYVAULT_NAME is required but was not found.
+          
           Please add to Job Template Extra Variables:
           
           ---
-          KEYVAULT_NAME: your-keyvault-name
+          KEYVAULT_NAME: ansible-aap-kv
           azure_client_id: "your-client-id"
           azure_client_secret: "your-client-secret"
           azure_tenant_id: "your-tenant-id"
           azure_subscription_id: "your-subscription-id"
+          server_name: "WEBAPP01"
+          application_name: "WebApp"
+          domain_name: "nat.net"
+          requester_confirmation: "YES"
           enable_dry_run: false
           ==========================================
       when: keyvault_name == ""
