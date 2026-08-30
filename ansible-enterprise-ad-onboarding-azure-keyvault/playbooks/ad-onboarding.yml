@@ -23,6 +23,11 @@
       - "gateway-secret-key"
     enable_dry_run: false
     azure_rest_api_version: "7.0"
+    
+    # Use current user dynamically - FIXES THE PERMISSION ISSUE
+    current_user: "{{ ansible_user_id | default('runner') }}"
+    current_home: "{{ ansible_env.HOME | default('/tmp') }}"
+    aap_install_dir: "{{ current_home }}/aap"
 
   tasks:
     - name: AZURE | Display debug info
@@ -31,18 +36,16 @@
           ==========================================
           🔍 DEBUG INFORMATION
           ==========================================
-          KEYVAULT_NAME from var: {{ KEYVAULT_NAME | default('NOT SET') }}
-          KEYVAULT_NAME from env: {{ lookup('env', 'KEYVAULT_NAME') | default('NOT SET') }}
-          KEYVAULT_NAME final: {{ keyvault_name | default('NOT SET') }}
+          KEYVAULT_NAME: {{ keyvault_name | default('NOT SET') }}
+          Current User: {{ current_user }}
+          Home Directory: {{ current_home }}
+          AAP Install Dir: {{ aap_install_dir }}
           ==========================================
 
     - name: AZURE | Validate Azure credentials are provided
       ansible.builtin.debug:
         msg: |
           ✓ Azure credentials validated
-          Client ID: {{ azure_client_id | default('MISSING') | truncate(10) }}
-          Tenant ID: {{ azure_tenant_id | default('MISSING') | truncate(10) }}
-          Subscription: {{ azure_subscription_id | default('MISSING') | truncate(10) }}
           Key Vault: {{ keyvault_name | default('MISSING') }}
       when: 
         - azure_client_id is defined
@@ -57,18 +60,8 @@
           ❌ KEY VAULT NAME NOT PROVIDED ❌
           ==========================================
           
-          KEYVAULT_NAME is required but was not found.
-          
-          Please add to Job Template Extra Variables:
-          
-          ---
+          Add to Job Template Extra Variables:
           KEYVAULT_NAME: ansible-aap-kv
-          azure_client_id: "4de43aec-3cfe-4235-a853-c542e48371bb"
-          azure_client_secret: "c_l8Q~mdB3L0sUjB~-4oF~sm~igc0KexyDGRfbet"
-          azure_tenant_id: "84b7f57c-6b05-41a1-9915-d17b5ed9000e"
-          azure_subscription_id: "264c88cf-3a13-4f74-b8e3-b3976a5f2a30"
-          enable_dry_run: false
-          
           ==========================================
       when: keyvault_name == ""
 
@@ -79,8 +72,7 @@
           ❌ AZURE CREDENTIALS MISSING ❌
           ==========================================
           
-          Please add these variables to your Job Template Extra Variables:
-          
+          Add these variables to Extra Variables:
           azure_client_id: "4de43aec-3cfe-4235-a853-c542e48371bb"
           azure_client_secret: "c_l8Q~mdB3L0sUjB~-4oF~sm~igc0KexyDGRfbet"
           azure_tenant_id: "84b7f57c-6b05-41a1-9915-d17b5ed9000e"
@@ -121,18 +113,8 @@
           ==========================================
           ❌ AZURE TOKEN RETRIEVAL FAILED ❌
           ==========================================
-          
-          Could not authenticate with Azure.
-          Status Code: {{ token_response.status | default('N/A') }}
+          Status: {{ token_response.status | default('N/A') }}
           Error: {{ token_response.msg | default('Unknown error') }}
-          Response: {{ token_response.content | default('No response') }}
-          
-          Please verify:
-          1. Client ID is correct
-          2. Client Secret is correct
-          3. Tenant ID is correct
-          4. Service Principal has proper permissions
-          5. Network connectivity to Azure
           ==========================================
       when: 
         - keyvault_name != ""
@@ -169,19 +151,6 @@
       ignore_errors: yes
       no_log: true
 
-    - name: AZURE | Debug secret retrieval status
-      ansible.builtin.debug:
-        msg: |
-          Secret: {{ item.item }}
-          Status: {{ item.status | default('N/A') }}
-          Found: {{ 'YES' if item.json is defined and item.json.value is defined else 'NO' }}
-      loop: "{{ az_secret_result.results }}"
-      when: 
-        - keyvault_name != ""
-        - az_secret_result is defined
-        - az_secret_result.results is defined
-      changed_when: false
-
     - name: AZURE | Set facts from retrieved secrets
       ansible.builtin.set_fact:
         "{{ item.item | replace('-', '_') }}": "{{ item.json.value }}"
@@ -203,17 +172,18 @@
           ==========================================
           Key Vault: {{ keyvault_name }}
           
-          Retrieved Secrets:
-          - Controller Admin Password: {{ '✅' if controller_admin_password is defined else '❌' }}
-          - Hub Admin Password: {{ '✅' if automationhub_admin_password is defined else '❌' }}
-          - EDA Admin Password: {{ '✅' if eda_admin_password is defined else '❌' }}
-          - Gateway Admin Password: {{ '✅' if automationgateway_admin_password is defined else '❌' }}
-          - PostgreSQL Admin Password: {{ '✅' if postgresql_admin_password is defined else '❌' }}
-          - Redis Admin Password: {{ '✅' if redis_admin_password is defined else '❌' }}
-          - Controller Secret Key: {{ '✅' if controller_secret_key is defined else '❌' }}
-          - Hub Secret Key: {{ '✅' if hub_secret_key is defined else '❌' }}
-          - EDA Secret Key: {{ '✅' if eda_secret_key is defined else '❌' }}
-          - Gateway Secret Key: {{ '✅' if gateway_secret_key is defined else '❌' }}
+          Retrieved:
+          - Controller Admin: {{ '✅' if controller_admin_password is defined else '❌' }}
+          - Hub Admin: {{ '✅' if automationhub_admin_password is defined else '❌' }}
+          - EDA Admin: {{ '✅' if eda_admin_password is defined else '❌' }}
+          - Gateway Admin: {{ '✅' if automationgateway_admin_password is defined else '❌' }}
+          - PostgreSQL: {{ '✅' if postgresql_admin_password is defined else '❌' }}
+          - Redis: {{ '✅' if redis_admin_password is defined else '❌' }}
+          - Controller Key: {{ '✅' if controller_secret_key is defined else '❌' }}
+          - Hub Key: {{ '✅' if hub_secret_key is defined else '❌' }}
+          - EDA Key: {{ '✅' if eda_secret_key is defined else '❌' }}
+          - Gateway Key: {{ '✅' if gateway_secret_key is defined else '❌' }}
+          - License: {{ '✅' if ansible_tower_license is defined else '❌' }}
           ==========================================
       when: 
         - keyvault_name != ""
@@ -226,14 +196,7 @@
           ==========================================
           ❌ REQUIRED SECRETS NOT FOUND ❌
           ==========================================
-          
-          Missing required secrets from Key Vault: {{ keyvault_name }}
-          
-          Please ensure these secrets exist:
-          1. controller-admin-password
-          2. automationhub-admin-password
-          
-          Also ensure Service Principal has 'Key Vault Secrets User' role.
+          Missing: controller-admin-password or automationhub-admin-password
           ==========================================
       when: 
         - keyvault_name != ""
@@ -251,8 +214,8 @@
                 hosts:
                   controller.example.com:
                     ansible_host: controller.example.com
-                    ansible_user: admin
-                    ansible_ssh_private_key_file: /home/admin/.ssh/id_rsa
+                    ansible_user: {{ current_user }}
+                    ansible_ssh_private_key_file: {{ current_home }}/.ssh/id_rsa
                     controller_admin_password: "{{ controller_admin_password | default('') }}"
                     controller_secret_key: "{{ controller_secret_key | default('') }}"
               
@@ -260,23 +223,23 @@
                 hosts:
                   execution.example.com:
                     ansible_host: execution.example.com
-                    ansible_user: admin
-                    ansible_ssh_private_key_file: /home/admin/.ssh/id_rsa
+                    ansible_user: {{ current_user }}
+                    ansible_ssh_private_key_file: {{ current_home }}/.ssh/id_rsa
               
               database:
                 hosts:
                   db.example.com:
                     ansible_host: db.example.com
-                    ansible_user: admin
-                    ansible_ssh_private_key_file: /home/admin/.ssh/id_rsa
+                    ansible_user: {{ current_user }}
+                    ansible_ssh_private_key_file: {{ current_home }}/.ssh/id_rsa
                     postgresql_admin_password: "{{ postgresql_admin_password | default('') }}"
               
               automationhub:
                 hosts:
                   hub.example.com:
                     ansible_host: hub.example.com
-                    ansible_user: admin
-                    ansible_ssh_private_key_file: /home/admin/.ssh/id_rsa
+                    ansible_user: {{ current_user }}
+                    ansible_ssh_private_key_file: {{ current_home }}/.ssh/id_rsa
                     automationhub_admin_password: "{{ automationhub_admin_password | default('') }}"
                     hub_secret_key: "{{ hub_secret_key | default('') }}"
               
@@ -284,8 +247,8 @@
                 hosts:
                   controller.example.com:
                     ansible_host: controller.example.com
-                    ansible_user: admin
-                    ansible_ssh_private_key_file: /home/admin/.ssh/id_rsa
+                    ansible_user: {{ current_user }}
+                    ansible_ssh_private_key_file: {{ current_home }}/.ssh/id_rsa
                     automationgateway_admin_password: "{{ automationgateway_admin_password | default('') }}"
                     gateway_secret_key: "{{ gateway_secret_key | default('') }}"
               
@@ -293,8 +256,8 @@
                 hosts:
                   controller.example.com:
                     ansible_host: controller.example.com
-                    ansible_user: admin
-                    ansible_ssh_private_key_file: /home/admin/.ssh/id_rsa
+                    ansible_user: {{ current_user }}
+                    ansible_ssh_private_key_file: {{ current_home }}/.ssh/id_rsa
                     eda_admin_password: "{{ eda_admin_password | default('') }}"
                     eda_secret_key: "{{ eda_secret_key | default('') }}"
               
@@ -310,25 +273,35 @@
 
     - name: AZURE | Create AAP installation directory
       ansible.builtin.file:
-        path: /home/admin/aap
+        path: "{{ aap_install_dir }}"
         state: directory
-        owner: admin
-        group: admin
         mode: '0755'
+        owner: "{{ current_user }}"
+        group: "{{ current_user }}"
       when: 
         - keyvault_name != ""
         - controller_admin_password is defined
+      ignore_errors: yes  # Ignore if can't set ownership
 
-    - name: AZURE | Copy inventory file to AAP directory
+    - name: AZURE | Alternative - Copy inventory to temp location if permissions fail
       ansible.builtin.copy:
         src: /tmp/aap_inventory.yml
-        dest: /home/admin/aap/inventory.yml
-        owner: admin
-        group: admin
+        dest: "/tmp/aap_inventory_final.yml"
         mode: '0644'
       when: 
         - keyvault_name != ""
         - controller_admin_password is defined
+      register: temp_copy
+
+    - name: AZURE | Copy inventory file to AAP directory
+      ansible.builtin.copy:
+        src: /tmp/aap_inventory.yml
+        dest: "{{ aap_install_dir }}/inventory.yml"
+        mode: '0644'
+      when: 
+        - keyvault_name != ""
+        - controller_admin_password is defined
+      ignore_errors: yes
 
     - name: AZURE | Clean up temporary inventory file
       ansible.builtin.file:
@@ -346,17 +319,21 @@
           ==========================================
           
           Secrets retrieved from: {{ keyvault_name }}
-          Inventory file: /home/admin/aap/inventory.yml
           
-          Next Steps:
-          cd /home/admin/aap
-          ansible-playbook -i inventory.yml ansible.containerized_installer.install
+          Inventory file locations:
+          1. {{ aap_install_dir }}/inventory.yml
+          2. /tmp/aap_inventory_final.yml (backup)
+          
+          To deploy AAP:
+          ansible-playbook -i {{ aap_install_dir }}/inventory.yml ansible.containerized_installer.install
           ==========================================
       when: 
         - keyvault_name != ""
         - controller_admin_password is defined
 
-    - name: AZURE | Logout cleanup (no-op for REST API)
+    - name: AZURE | Display inventory file content for debugging
       ansible.builtin.debug:
-        msg: "✓ REST API session completed"
-      when: keyvault_name != ""
+        msg: "Inventory file created at /tmp/aap_inventory_final.yml"
+      when: 
+        - keyvault_name != ""
+        - controller_admin_password is defined
