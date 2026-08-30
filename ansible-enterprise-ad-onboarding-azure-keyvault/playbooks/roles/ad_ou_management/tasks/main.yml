@@ -50,3 +50,9 @@
   ansible.builtin.debug:
     msg: "Application OU '{{ application_name }}' created status: {{ 'CREATED' if app_ou_result.changed else 'EXISTS' }}"
   when: not enable_dry_run | bool
+
+- name: OU | Set fact for reporting
+  ansible.builtin.set_fact:
+    ou_creation:
+      stdout: "{{ 'CREATED' if app_ou_result.changed else 'EXISTS' }}"
+  when: not enable_dry_run | bool

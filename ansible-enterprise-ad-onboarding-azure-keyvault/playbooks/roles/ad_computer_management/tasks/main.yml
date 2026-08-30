@@ -1,8 +1,10 @@
 ---
-# Role: ad_computer_management - Main entry point
-# Purpose: This file is just a placeholder - actual tasks are split
-# Tasks are called from main playbook using tasks_from parameter
+# Role: ad_computer_management
+# Purpose: Check and move server in Active Directory
 
-- name: WARNING | This role should be called with tasks_from parameter
-  ansible.builtin.debug:
-    msg: "Please use tasks_from=check_server or tasks_from=move_server"
+- name: SERVER | Include server check tasks
+  ansible.builtin.include_tasks: check_server.yml
+
+- name: SERVER | Include server move tasks
+  ansible.builtin.include_tasks: move_server.yml
+  when: server_exists and not enable_dry_run | bool

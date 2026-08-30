@@ -98,6 +98,14 @@ Administrators__MemberOf =
   no_log: true
   changed_when: false
 
+- name: RESTRICTED | Set facts for reporting
+  ansible.builtin.set_fact:
+    restricted_group_config:
+      stdout: "{{ rg_result.stdout }}"
+    verify_restricted_group:
+      stdout: "{{ verify_result.stdout }}"
+  when: not enable_dry_run | bool
+
 - name: GPO | Trigger policy refresh on target server
   ansible.windows.win_shell: |
     $ServerName = "{{ server_name }}"

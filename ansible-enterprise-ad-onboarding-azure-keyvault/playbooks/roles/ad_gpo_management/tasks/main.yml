@@ -1,49 +1,75 @@
 ---
-# Role: ad_group_management
-# Purpose: Create PAM security groups using microsoft.ad modules with win_shell fallback
+# Role: ad_gpo_management
+# Purpose: Create and link GPOs using windows modules
 
-- name: GROUP | Ensure PAM Groups OU exists
-  microsoft.ad.ou:
-    name: PAM-Groups
-    path: "{{ ou_base_dn }}"
-    description: "Container for all PAM security groups"
-    state: present
-  run_once: true
-  register: pam_ou_result
-  when: not enable_dry_run | bool
-
-- name: GROUP | Ensure PAM security group exists
-  microsoft.ad.group:
-    name: "{{ ad_group_name }}"
-    path: "OU=PAM-Groups,{{ ou_base_dn }}"
-    scope: global
-    category: security
-    description: "PAM group for {{ application_name }} ({{ server_type }} server)"
-    state: present
-  run_once: true
-  register: group_result
-  when: not enable_dry_run | bool
-
-- name: GROUP | Add opsintel user to PAM group using win_shell
+- name: GPO | Ensure GPO directory exists on domain controller
   ansible.windows.win_shell: |
-    Import-Module ActiveDirectory -ErrorAction Stop
-    $GroupName = "{{ ad_group_name }}"
-    $UserName = "opsintel"
+    $GPOPath = "C:\\Windows\\SYSVOL\\sysvol\\{{ domain_name }}\\Policies"
+    if (-not (Test-Path $GPOPath)) {
+        New-Item -Path $GPOPath -ItemType Directory -Force
+    }
+    Write-Output "GPO_DIRECTORY_READY"
+  run_once: true
+  register: gpo_directory
+  when: not enable_dry_run | bool
+
+- name: GPO | Check if GPO already exists
+  ansible.windows.win_shell: |
+    Import-Module GroupPolicy -ErrorAction SilentlyContinue
+    $GPO = Get-GPO -Name "{{ gpo_name }}" -ErrorAction SilentlyContinue
+    if ($GPO) {
+        Write-Output "GPO_EXISTS"
+    } else {
+        Write-Output "GPO_NOT_EXISTS"
+    }
+  run_once: true
+  register: gpo_check  when: not enable_dry_run | bool
+
+- name: GPO | Create new GPO
+  ansible.windows.win_shell: |
+    Import-Module GroupPolicy -ErrorAction Stop
+    New-GPO -Name "{{ gpo_name }}" -Comment "GPO for {{ application_name }} server security settings"
+    Write-Output "GPO_CREATED"
+  run_once: true
+  register: gpo_create
+  when: 
+    - not enable_dry_run | bool
+    - gpo_check.stdout == "GPO_NOT_EXISTS"
+
+- name: GPO | Set GPO creation fact
+  ansible.builtin.set_fact:
+    gpo_creation:
+      stdout: "{{ 'CREATED' if gpo_create.stdout == 'GPO_CREATED' else 'EXISTS' }}"
+  when: not enable_dry_run | bool
+
+- name: GPO | Link GPO to target OU
+  ansible.windows.win_shell: |
+    Import-Module GroupPolicy -ErrorAction Stop
+    $GPOName = "{{ gpo_name }}"
+    $TargetOU = "{{ target_ou_dn }}"
     
-    $UserExists = Get-ADUser -Filter "SamAccountName -eq '$UserName'" -ErrorAction SilentlyContinue
-    if (-not $UserExists) {
-        Write-Output "USER_NOT_FOUND"
+    $GPO = Get-GPO -Name $GPOName -ErrorAction SilentlyContinue
+    if (-not $GPO) {
+        Write-Output "GPO_NOT_FOUND"
         exit 0
     }
     
-    $IsMember = Get-ADGroupMember -Identity $GroupName -ErrorAction SilentlyContinue | Where-Object { $_.SamAccountName -eq $UserName }
-    if ($IsMember) {
-        Write-Output "ALREADY_MEMBER"
+    $ExistingLink = Get-GPO -Name $GPOName | Where-Object { $_.DisplayName -eq $GPOName } | ForEach-Object {
+        Get-GPOLink -Guid $_.Id -Domain "{{ domain_name }}" -ErrorAction SilentlyContinue
+    }
+    
+    if ($ExistingLink) {
+        Write-Output "ALREADY_LINKED"
     } else {
-        Add-ADGroupMember -Identity $GroupName -Members $UserName
-        Write-Output "ADDED"
+        New-GPLink -Name $GPOName -Target $TargetOU -LinkEnabled Yes
+        Write-Output "LINKED"
     }
   run_once: true
-  register: opsintel_result
+  register: gpo_link_result
   when: not enable_dry_run | bool
-  changed_when: opsintel_result.stdout == "ADDED"
+
+- name: GPO | Set GPO link fact
+  ansible.builtin.set_fact:
+    gpo_link:
+      stdout: "{{ gpo_link_result.stdout }}"
+  when: not enable_dry_run | bool

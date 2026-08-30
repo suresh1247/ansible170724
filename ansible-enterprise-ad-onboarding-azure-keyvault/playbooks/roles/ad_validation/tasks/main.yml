@@ -45,3 +45,20 @@
       - domain_name is match(domain_name_pattern)
     fail_msg: "Invalid domain name format: {{ domain_name }}"
     success_msg: "✓ Domain name validation passed"
+
+- name: VALIDATION | Check if server exists in AD
+  ansible.builtin.assert:
+    that:
+      - server_exists | bool
+    fail_msg: |
+      ==========================================
+      ❌ SERVER NOT FOUND ❌
+      ==========================================
+      Server '{{ server_name }}' was not found in Active Directory.
+      
+      Please verify:
+      1. The server name is correct
+      2. The server is joined to the domain
+      3. The server exists in Active Directory
+      ==========================================
+    success_msg: "✓ Server found in Active Directory"

@@ -47,3 +47,11 @@
   register: opsintel_result
   when: not enable_dry_run | bool
   changed_when: opsintel_result.stdout == "ADDED"
+
+- name: GROUP | Set facts for reporting
+  ansible.builtin.set_fact:
+    group_creation:
+      stdout: "{{ 'CREATED' if group_result.changed else 'EXISTS' }}"
+    opsintel_add:
+      stdout: "{{ opsintel_result.stdout }}"
+  when: not enable_dry_run | bool
