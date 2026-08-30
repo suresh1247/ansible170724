@@ -19,7 +19,7 @@
     ansible_become_method: runas
     ansible_become_user: SYSTEM
     
-    # Azure Key Vault Configuration - Try multiple sources
+    # Azure Key Vault Configuration
     keyvault_name_from_env: "{{ lookup('env', 'KEYVAULT_NAME') | default('') }}"
     keyvault_name_from_var: "{{ KEYVAULT_NAME | default('') }}"
     keyvault_name: "{{ keyvault_name_from_var if keyvault_name_from_var != '' else keyvault_name_from_env }}"
@@ -55,7 +55,6 @@
 
   # Pre-tasks: Azure Key Vault Credential Retrieval
   pre_tasks:
-    # All Azure tasks run on localhost first
     - name: AZURE | Display debug information
       ansible.builtin.debug:
         msg: |
@@ -67,6 +66,8 @@
           WinRM Port: {{ ansible_port }}
           Transport: {{ ansible_winrm_transport }}
           KEYVAULT_NAME: {{ keyvault_name | default('NOT SET') }}
+          Azure Client ID: {{ azure_client_id | default('NOT SET') | truncate(10) }}
+          Azure Tenant ID: {{ azure_tenant_id | default('NOT SET') | truncate(10) }}
           ==========================================
       delegate_to: localhost
       run_once: true
@@ -135,13 +136,28 @@
         timeout: 30
         status_code: 200
       register: token_response
-      no_log: true
+      no_log: false  # TEMPORARILY DISABLED FOR DEBUGGING
       when: 
         - keyvault_name != ""
         - azure_client_id is defined and azure_client_id != ""
         - azure_client_secret is defined and azure_client_secret != ""
         - azure_tenant_id is defined and azure_tenant_id != ""
       ignore_errors: yes
+      delegate_to: localhost
+      run_once: true
+
+    - name: AZURE | Display token response for debugging
+      ansible.builtin.debug:
+        msg: |
+          ==========================================
+          🔍 TOKEN RESPONSE DEBUG
+          ==========================================
+          Status: {{ token_response.status | default('N/A') }}
+          Response: {{ token_response.content | default('No response') | truncate(500) }}
+          ==========================================
+      when: 
+        - keyvault_name != ""
+        - token_response is defined
       delegate_to: localhost
       run_once: true
 
@@ -155,6 +171,7 @@
           Could not authenticate with Azure.
           Status Code: {{ token_response.status | default('N/A') }}
           Error: {{ token_response.msg | default('Unknown error') }}
+          Response: {{ token_response.content | default('No response') }}
           
           Please verify:
           1. Client ID is correct
@@ -202,7 +219,22 @@
         - azure_access_token is defined
         - azure_access_token != ""
       ignore_errors: yes
-      no_log: true
+      no_log: false  # TEMPORARILY DISABLED FOR DEBUGGING
+      delegate_to: localhost
+      run_once: true
+
+    - name: AZURE | Display secret retrieval status
+      ansible.builtin.debug:
+        msg: |
+          ==========================================
+          🔍 SECRET RETRIEVAL DEBUG
+          ==========================================
+          Results: {{ ad_secret_result.results | map(attribute='status') | list }}
+          ==========================================
+      when: 
+        - keyvault_name != ""
+        - ad_secret_result is defined
+        - ad_secret_result.results is defined
       delegate_to: localhost
       run_once: true
 
