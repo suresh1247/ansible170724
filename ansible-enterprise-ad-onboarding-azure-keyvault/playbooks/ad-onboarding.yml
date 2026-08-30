@@ -50,6 +50,8 @@
           🔍 AZURE KEY VAULT DEBUG
           ==========================================
           KEYVAULT_NAME: {{ keyvault_name | default('NOT SET') }}
+          Target Host: {{ inventory_hostname }}
+          WinRM Port: {{ ansible_port | default('5985') }}
           ==========================================
       when: keyvault_name != ""
 
@@ -114,6 +116,8 @@
         - azure_client_secret is defined and azure_client_secret != ""
         - azure_tenant_id is defined and azure_tenant_id != ""
       ignore_errors: yes
+      delegate_to: localhost
+      run_once: true
 
     - name: AZURE | Fail if token retrieval failed
       ansible.builtin.fail:
@@ -137,6 +141,8 @@
         - token_response is defined
         - token_response.status is defined
         - token_response.status != 200
+      delegate_to: localhost
+      run_once: true
 
     - name: AZURE | Set access token fact
       ansible.builtin.set_fact:
@@ -147,6 +153,8 @@
         - token_response.json is defined
         - token_response.json.access_token is defined
       no_log: true
+      delegate_to: localhost
+      run_once: true
 
     - name: AZURE | Retrieve AD credentials from Key Vault
       ansible.builtin.uri:
@@ -169,6 +177,8 @@
         - azure_access_token != ""
       ignore_errors: yes
       no_log: true
+      delegate_to: localhost
+      run_once: true
 
     - name: AZURE | Set AD credentials from retrieved secrets
       ansible.builtin.set_fact:
@@ -180,6 +190,8 @@
         - ad_secret_result is defined
         - ad_secret_result.results is defined
       no_log: true
+      delegate_to: localhost
+      run_once: true
 
     - name: AZURE | Fail if AD credentials not retrieved
       ansible.builtin.fail:
@@ -200,6 +212,8 @@
         - ad_username is not defined or ad_username == ''
         - ad_password is not defined or ad_password == ''
         - ad_domain_name is not defined or ad_domain_name == ''
+      delegate_to: localhost
+      run_once: true
 
     - name: AZURE | Display credential retrieval status
       ansible.builtin.debug:
@@ -211,7 +225,27 @@
         - keyvault_name != ""
         - ad_username is defined
         - ad_domain_name is defined
+      delegate_to: localhost
+      run_once: true
       no_log: false
+
+    # Set WinRM connection variables for the Windows host
+    - name: CONNECTION | Set WinRM connection variables
+      ansible.builtin.set_fact:
+        ansible_user: "{{ ad_username }}"
+        ansible_password: "{{ ad_password }}"
+        ansible_connection: winrm
+        ansible_winrm_transport: ntlm
+        ansible_winrm_server_cert_validation: ignore
+        ansible_port: 5985
+        ansible_winrm_operation_timeout_sec: 60
+        ansible_winrm_read_timeout_sec: 120
+        ansible_become_method: runas
+        ansible_become_user: SYSTEM
+      no_log: true
+      when: 
+        - ad_username is defined
+        - ad_password is defined
 
     # Validation Tasks
     - name: VALIDATION | Validate required parameters
@@ -258,19 +292,6 @@
       ansible.builtin.debug:
         msg: "⚠️ DRY RUN MODE ENABLED - No changes will be made to Active Directory"
       when: enable_dry_run | bool
-
-    # Connection Tasks
-    - name: CONNECTION | Set WinRM connection variables
-      ansible.builtin.set_fact:
-        ansible_user: "{{ ad_username }}"
-        ansible_password: "{{ ad_password }}"
-        ansible_connection: winrm
-        ansible_winrm_transport: ntlm
-        ansible_winrm_server_cert_validation: ignore
-        ansible_port: 5985
-        ansible_winrm_operation_timeout_sec: 60
-        ansible_winrm_read_timeout_sec: 120
-      no_log: true
 
     - name: CONNECTION | Test connectivity to domain controller
       ansible.windows.win_ping:
@@ -426,3 +447,5 @@
       ansible.builtin.debug:
         msg: "✓ Azure REST API session completed"
       when: keyvault_name != ""
+      delegate_to: localhost
+      run_once: true
