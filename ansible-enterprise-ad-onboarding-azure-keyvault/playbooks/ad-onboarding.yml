@@ -55,6 +55,14 @@
 
   # Pre-tasks: Azure Key Vault Credential Retrieval
   pre_tasks:
+    # CRITICAL: First, set local connection for Azure tasks
+    - name: CONNECTION | Set local connection for Azure tasks
+      ansible.builtin.set_fact:
+        ansible_connection_local: local
+      delegate_to: localhost
+      run_once: true
+      changed_when: false
+
     - name: AZURE | Display debug information
       ansible.builtin.debug:
         msg: |
@@ -136,7 +144,7 @@
         timeout: 30
         status_code: 200
       register: token_response
-      no_log: false  # TEMPORARILY DISABLED FOR DEBUGGING
+      no_log: false
       when: 
         - keyvault_name != ""
         - azure_client_id is defined and azure_client_id != ""
@@ -219,7 +227,7 @@
         - azure_access_token is defined
         - azure_access_token != ""
       ignore_errors: yes
-      no_log: false  # TEMPORARILY DISABLED FOR DEBUGGING
+      no_log: false
       delegate_to: localhost
       run_once: true
 
@@ -229,7 +237,7 @@
           ==========================================
           🔍 SECRET RETRIEVAL DEBUG
           ==========================================
-          Results: {{ ad_secret_result.results | map(attribute='status') | list }}
+          Status codes: {{ ad_secret_result.results | map(attribute='status') | list }}
           ==========================================
       when: 
         - keyvault_name != ""
@@ -287,7 +295,7 @@
       run_once: true
       no_log: false
 
-    # CRITICAL: Set WinRM connection variables for the Windows host
+    # CRITICAL: Now set WinRM connection variables for the Windows host
     - name: CONNECTION | Set WinRM connection variables for Windows host
       ansible.builtin.set_fact:
         ansible_user: "{{ ad_username }}"
