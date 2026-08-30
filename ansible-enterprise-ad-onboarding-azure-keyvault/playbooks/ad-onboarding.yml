@@ -33,7 +33,32 @@
         azure_client_secret: "{{ lookup('ansible.builtin.credential', azure_credential_name, 'password') | default('') }}"
         azure_tenant_id: "{{ lookup('ansible.builtin.credential', azure_credential_name, 'tenant') | default('') }}"
         azure_subscription_id: "{{ lookup('ansible.builtin.credential', azure_credential_name, 'subscription') | default('') }}"
-      no_log: true
+      no_log: false  # Changed to false for debugging
+      register: azure_creds
+
+    - name: AZURE | Verify credentials are set
+      ansible.builtin.fail:
+        msg: |
+          ==========================================
+          ❌ AZURE CREDENTIALS MISSING ❌
+          ==========================================
+          
+          Please verify the following in your AAP credential "{{ azure_credential_name }}":
+          
+          All fields must be populated:
+          - username (Client ID)
+          - password (Client Secret)
+          - tenant (Tenant ID)
+          - subscription (Subscription ID)
+          
+          Current values:
+          - Client ID: {{ 'SET' if azure_client_id != '' else 'MISSING' }}
+          - Client Secret: {{ 'SET' if azure_client_secret != '' else 'MISSING' }}
+          - Tenant ID: {{ 'SET' if azure_tenant_id != '' else 'MISSING' }}
+          - Subscription ID: {{ 'SET' if azure_subscription_id != '' else 'MISSING' }}
+          ==========================================
+      when: 
+        - azure_client_id == '' or azure_client_secret == '' or azure_tenant_id == '' or azure_subscription_id == ''
 
     - name: AZURE | Get Azure Access Token
       ansible.builtin.uri:
@@ -47,9 +72,34 @@
           grant_type: "client_credentials"
         validate_certs: yes
         timeout: 30
+        status_code: 200
       register: token_response
       no_log: true
       when: keyvault_name != ""
+      ignore_errors: yes
+
+    - name: AZURE | Fail if token retrieval failed
+      ansible.builtin.fail:
+        msg: |
+          ==========================================
+          ❌ AZURE TOKEN RETRIEVAL FAILED ❌
+          ==========================================
+          
+          Could not authenticate with Azure.
+          Status Code: {{ token_response.status | default('N/A') }}
+          Error: {{ token_response.msg | default('Unknown error') }}
+          
+          Please verify:
+          1. Client ID is correct
+          2. Client Secret is correct
+          3. Tenant ID is correct
+          4. Service Principal has proper permissions
+          ==========================================
+      when: 
+        - keyvault_name != ""
+        - token_response is defined
+        - token_response.status is defined
+        - token_response.status != 200
 
     - name: AZURE | Set access token fact
       ansible.builtin.set_fact:
@@ -70,11 +120,27 @@
         validate_certs: yes
         timeout: 30
         return_content: yes
+        status_code: 200
       loop: "{{ secret_names }}"
       register: az_secret_result
-      when: keyvault_name != ""
+      when: 
+        - keyvault_name != ""
+        - azure_access_token is defined
       ignore_errors: yes
       no_log: true
+
+    - name: AZURE | Debug secret retrieval status
+      ansible.builtin.debug:
+        msg: |
+          Secret: {{ item.item }}
+          Status: {{ item.status | default('N/A') }}
+          Found: {{ 'YES' if item.json is defined and item.json.value is defined else 'NO' }}
+      loop: "{{ az_secret_result.results }}"
+      when: 
+        - keyvault_name != ""
+        - az_secret_result is defined
+        - az_secret_result.results is defined
+      changed_when: false
 
     - name: AZURE | Set facts from retrieved secrets
       ansible.builtin.set_fact:
@@ -86,6 +152,31 @@
         - item.json is defined
         - item.json.value is defined
         - item.json.value != ""
+        - item.status is defined
+        - item.status == 200
+
+    - name: AZURE | Fail if no secrets were retrieved
+      ansible.builtin.fail:
+        msg: |
+          ==========================================
+          ❌ NO SECRETS RETRIEVED ❌
+          ==========================================
+          
+          Could not retrieve any secrets from Azure Key Vault: {{ keyvault_name }}
+          
+          Please verify:
+          1. Key Vault name is correct: {{ keyvault_name }}
+          2. Service Principal has 'Key Vault Secrets User' role
+          3. Secrets exist with exact names specified
+          4. Key Vault URI is accessible
+          
+          Expected secret names:
+          {{ secret_names | join('\n  ') }}
+          ==========================================
+      when: 
+        - keyvault_name != ""
+        - controller_admin_password is not defined
+        - automationhub_admin_password is not defined
 
     - name: AZURE | Debug retrieved secrets (excluding passwords)
       ansible.builtin.debug:
@@ -230,27 +321,13 @@
           ==========================================
           
           Please set the KEYVAULT_NAME as an extra variable in AAP:
+          
+          In Job Template -> Extra Variables:
           KEYVAULT_NAME: your-keyvault-name
           ==========================================
       when: keyvault_name == ""
 
-    - name: AZURE | Fail if secrets not retrieved
-      ansible.builtin.fail:
-        msg: |
-          ==========================================
-          ❌ SECRETS RETRIEVAL FAILED ❌
-          ==========================================
-          
-          Could not retrieve secrets from Azure Key Vault: {{ keyvault_name }}
-          
-          Please verify:
-          1. Key Vault name is correct
-          2. Service Principal has 'Key Vault Secrets User' role
-          3. Secrets exist with exact names specified
-          4. Network connectivity to Azure
-          ==========================================
-      when: 
-        - keyvault_name != ""
-        - controller_admin_password is not defined
-        - automationhub_admin_password is not defined
-      ignore_errors: no
+    - name: AZURE | Logout cleanup (no-op for REST API)
+      ansible.builtin.debug:
+        msg: "✓ REST API session completed"
+      when: keyvault_name != ""
