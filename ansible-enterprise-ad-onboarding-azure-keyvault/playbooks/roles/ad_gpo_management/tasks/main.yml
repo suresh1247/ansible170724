@@ -1,7 +1,4 @@
 ---
-# Role: ad_gpo_management
-# Purpose: Create and link GPOs
-
 - name: GPO | Check if GPO exists
   ansible.windows.win_shell: |
     Import-Module GroupPolicy -ErrorAction SilentlyContinue
