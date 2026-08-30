@@ -1,5 +1,5 @@
 ---
-- name: RETRIEVE CREDENTIALS FROM AZURE KEY VAULT
+- name: RETRIEVE CREDENTIALS FROM AZURE KEY VAULT USING REST API
   hosts: localhost
   connection: local
   gather_facts: yes
@@ -19,6 +19,7 @@
       - "eda-secret-key"
       - "gateway-secret-key"
     enable_dry_run: false
+    azure_rest_api_version: "7.0"
 
   tasks:
     - name: AZURE | Validate Azure credentials from AAP credential
@@ -26,75 +27,67 @@
         msg: "✓ Azure credentials validated"
       changed_when: false
 
-    - name: AZURE | Check if azure.azcollection is available
-      ansible.builtin.shell: |
-        ansible-galaxy collection list | grep azure.azcollection || echo "NOT_FOUND"
-      register: collection_check
-      changed_when: false
-      ignore_errors: yes
-
-    - name: AZURE | Install azure.azcollection if not present
-      ansible.builtin.shell: |
-        ansible-galaxy collection install azure.azcollection --force
-      when: collection_check.stdout is defined and "NOT_FOUND" in collection_check.stdout
-      ignore_errors: yes
-      register: collection_install
-
-    - name: AZURE | Install Azure Python SDK
-      ansible.builtin.pip:
-        name:
-          - azure-core==1.29.5
-          - azure-identity==1.15.0
-          - azure-keyvault-secrets==4.7.0
-          - azure-mgmt-keyvault==10.2.3
-          - azure-mgmt-resource==23.1.1
-          - msrestazure==0.6.4
-        state: present
-      ignore_errors: yes
-      register: pip_install
-
     - name: AZURE | Get Azure credentials from AAP credential
       ansible.builtin.set_fact:
-        azure_subscription_id: "{{ lookup('ansible.builtin.credential', azure_credential_name, 'subscription') | default('') }}"
-        azure_tenant_id: "{{ lookup('ansible.builtin.credential', azure_credential_name, 'tenant') | default('') }}"
         azure_client_id: "{{ lookup('ansible.builtin.credential', azure_credential_name, 'username') | default('') }}"
         azure_client_secret: "{{ lookup('ansible.builtin.credential', azure_credential_name, 'password') | default('') }}"
+        azure_tenant_id: "{{ lookup('ansible.builtin.credential', azure_credential_name, 'tenant') | default('') }}"
+        azure_subscription_id: "{{ lookup('ansible.builtin.credential', azure_credential_name, 'subscription') | default('') }}"
       no_log: true
 
-    - name: AZURE | Login to Azure using service principal
-      azure.azcollection.azure_rm_auth:
-        subscription_id: "{{ azure_subscription_id }}"
-        tenant: "{{ azure_tenant_id }}"
-        client_id: "{{ azure_client_id }}"
-        secret: "{{ azure_client_secret }}"
-      register: az_login
+    - name: AZURE | Get Azure Access Token
+      ansible.builtin.uri:
+        url: "https://login.microsoftonline.com/{{ azure_tenant_id }}/oauth2/v2.0/token"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          client_id: "{{ azure_client_id }}"
+          client_secret: "{{ azure_client_secret }}"
+          scope: "https://vault.azure.net/.default"
+          grant_type: "client_credentials"
+        validate_certs: yes
+        timeout: 30
+      register: token_response
+      no_log: true
       when: keyvault_name != ""
+
+    - name: AZURE | Set access token fact
+      ansible.builtin.set_fact:
+        azure_access_token: "{{ token_response.json.access_token }}"
+      when: 
+        - keyvault_name != ""
+        - token_response is defined
+        - token_response.json is defined
+        - token_response.json.access_token is defined
       no_log: true
 
-    - name: AZURE | Retrieve secrets from Key Vault
-      azure.azcollection.azure_rm_keyvault_secret_info:
-        keyvault_uri: "https://{{ keyvault_name }}.vault.azure.net/"
-        secret_name: "{{ item }}"
+    - name: AZURE | Retrieve secrets from Key Vault using REST API
+      ansible.builtin.uri:
+        url: "https://{{ keyvault_name }}.vault.azure.net/secrets/{{ item }}?api-version={{ azure_rest_api_version }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ azure_access_token }}"
+        validate_certs: yes
+        timeout: 30
+        return_content: yes
       loop: "{{ secret_names }}"
       register: az_secret_result
       when: keyvault_name != ""
       ignore_errors: yes
       no_log: true
-      failed_when: false
 
     - name: AZURE | Set facts from retrieved secrets
       ansible.builtin.set_fact:
-        "{{ item.item | replace('-', '_') }}": "{{ item.secret }}"
+        "{{ item.item | replace('-', '_') }}": "{{ item.json.value }}"
       loop: "{{ az_secret_result.results }}"
       when: 
         - keyvault_name != ""
         - item is defined
-        - item.item is defined
-        - item.secret is defined
-        - item.secret != ""
-        - item.failed is not defined or not item.failed
+        - item.json is defined
+        - item.json.value is defined
+        - item.json.value != ""
 
-    - name: AZURE | Debug retrieved secrets
+    - name: AZURE | Debug retrieved secrets (excluding passwords)
       ansible.builtin.debug:
         msg: |
           ✓ Retrieved secrets from Key Vault: {{ keyvault_name }}
@@ -217,12 +210,14 @@
           ✅ AZURE KEY VAULT RETRIEVAL COMPLETE ✅
           ==========================================
           
-          Secrets retrieved from Azure Key Vault: {{ keyvault_name }}
+          Secrets have been retrieved from Azure Key Vault: {{ keyvault_name }}
+          
           Inventory file created at: /home/admin/aap/inventory.yml
           
           To deploy AAP:
           cd /home/admin/aap
           ansible-playbook -i inventory.yml ansible.containerized_installer.install
+          
           ==========================================
       when: keyvault_name != ""
       changed_when: false
@@ -234,7 +229,7 @@
           ❌ KEY VAULT NAME NOT PROVIDED ❌
           ==========================================
           
-          Set KEYVAULT_NAME as extra variable in AAP:
+          Please set the KEYVAULT_NAME as an extra variable in AAP:
           KEYVAULT_NAME: your-keyvault-name
           ==========================================
       when: keyvault_name == ""
@@ -245,13 +240,14 @@
           ==========================================
           ❌ SECRETS RETRIEVAL FAILED ❌
           ==========================================
+          
           Could not retrieve secrets from Azure Key Vault: {{ keyvault_name }}
           
-          Verify:
+          Please verify:
           1. Key Vault name is correct
           2. Service Principal has 'Key Vault Secrets User' role
-          3. Secrets exist with exact names
-          4. azure.azcollection is installed
+          3. Secrets exist with exact names specified
+          4. Network connectivity to Azure
           ==========================================
       when: 
         - keyvault_name != ""
