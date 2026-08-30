@@ -4,7 +4,6 @@
   connection: local
   gather_facts: yes
   vars:
-    azure_credential_name: "Azure Service Principal"
     keyvault_name: "{{ lookup('env', 'KEYVAULT_NAME') | default('', true) }}"
     secret_names:
       - "ansible-tower-license"
@@ -27,13 +26,14 @@
         msg: "✓ Azure credentials validated"
       changed_when: false
 
-    - name: AZURE | Get Azure credentials from AAP credential
+    - name: AZURE | Get Azure credentials from AAP credential (AAP 2.4+)
       ansible.builtin.set_fact:
-        azure_client_id: "{{ lookup('ansible.builtin.credential', azure_credential_name, 'username') | default('') }}"
-        azure_client_secret: "{{ lookup('ansible.builtin.credential', azure_credential_name, 'password') | default('') }}"
-        azure_tenant_id: "{{ lookup('ansible.builtin.credential', azure_credential_name, 'tenant') | default('') }}"
-        azure_subscription_id: "{{ lookup('ansible.builtin.credential', azure_credential_name, 'subscription') | default('') }}"
-      no_log: false  # Changed to false for debugging
+        azure_client_id: "{{ lookup('credential', azure_credential_name, 'username') | default('') }}"
+        azure_client_secret: "{{ lookup('credential', azure_credential_name, 'password') | default('') }}"
+        azure_tenant_id: "{{ lookup('credential', azure_credential_name, 'tenant') | default('') }}"
+        azure_subscription_id: "{{ lookup('credential', azure_credential_name, 'subscription') | default('') }}"
+      no_log: false
+      when: azure_credential_name is defined
       register: azure_creds
 
     - name: AZURE | Verify credentials are set
@@ -75,7 +75,11 @@
         status_code: 200
       register: token_response
       no_log: true
-      when: keyvault_name != ""
+      when: 
+        - keyvault_name != ""
+        - azure_client_id != ""
+        - azure_client_secret != ""
+        - azure_tenant_id != ""
       ignore_errors: yes
 
     - name: AZURE | Fail if token retrieval failed
@@ -94,6 +98,7 @@
           2. Client Secret is correct
           3. Tenant ID is correct
           4. Service Principal has proper permissions
+          5. Network connectivity to Azure (login.microsoftonline.com)
           ==========================================
       when: 
         - keyvault_name != ""
@@ -129,19 +134,6 @@
       ignore_errors: yes
       no_log: true
 
-    - name: AZURE | Debug secret retrieval status
-      ansible.builtin.debug:
-        msg: |
-          Secret: {{ item.item }}
-          Status: {{ item.status | default('N/A') }}
-          Found: {{ 'YES' if item.json is defined and item.json.value is defined else 'NO' }}
-      loop: "{{ az_secret_result.results }}"
-      when: 
-        - keyvault_name != ""
-        - az_secret_result is defined
-        - az_secret_result.results is defined
-      changed_when: false
-
     - name: AZURE | Set facts from retrieved secrets
       ansible.builtin.set_fact:
         "{{ item.item | replace('-', '_') }}": "{{ item.json.value }}"
@@ -154,29 +146,6 @@
         - item.json.value != ""
         - item.status is defined
         - item.status == 200
-
-    - name: AZURE | Fail if no secrets were retrieved
-      ansible.builtin.fail:
-        msg: |
-          ==========================================
-          ❌ NO SECRETS RETRIEVED ❌
-          ==========================================
-          
-          Could not retrieve any secrets from Azure Key Vault: {{ keyvault_name }}
-          
-          Please verify:
-          1. Key Vault name is correct: {{ keyvault_name }}
-          2. Service Principal has 'Key Vault Secrets User' role
-          3. Secrets exist with exact names specified
-          4. Key Vault URI is accessible
-          
-          Expected secret names:
-          {{ secret_names | join('\n  ') }}
-          ==========================================
-      when: 
-        - keyvault_name != ""
-        - controller_admin_password is not defined
-        - automationhub_admin_password is not defined
 
     - name: AZURE | Debug retrieved secrets (excluding passwords)
       ansible.builtin.debug:
@@ -193,7 +162,9 @@
           - Hub Secret Key: {{ 'SET' if hub_secret_key is defined else 'NOT FOUND' }}
           - EDA Secret Key: {{ 'SET' if eda_secret_key is defined else 'NOT FOUND' }}
           - Gateway Secret Key: {{ 'SET' if gateway_secret_key is defined else 'NOT FOUND' }}
-      when: keyvault_name != ""
+      when: 
+        - keyvault_name != ""
+        - controller_admin_password is defined or automationhub_admin_password is defined
       changed_when: false
 
     - name: AZURE | Generate inventory file with retrieved secrets
@@ -310,8 +281,9 @@
           ansible-playbook -i inventory.yml ansible.containerized_installer.install
           
           ==========================================
-      when: keyvault_name != ""
-      changed_when: false
+      when: 
+        - keyvault_name != ""
+        - controller_admin_password is defined
 
     - name: AZURE | Fail if Key Vault name not provided
       ansible.builtin.fail:
@@ -327,7 +299,25 @@
           ==========================================
       when: keyvault_name == ""
 
-    - name: AZURE | Logout cleanup (no-op for REST API)
-      ansible.builtin.debug:
-        msg: "✓ REST API session completed"
-      when: keyvault_name != ""
+    - name: AZURE | Fail if secrets not retrieved
+      ansible.builtin.fail:
+        msg: |
+          ==========================================
+          ❌ SECRETS RETRIEVAL FAILED ❌
+          ==========================================
+          
+          Could not retrieve secrets from Azure Key Vault: {{ keyvault_name }}
+          
+          Please verify:
+          1. Key Vault name is correct: {{ keyvault_name }}
+          2. Service Principal has 'Key Vault Secrets User' role
+          3. Secrets exist with exact names specified
+          4. Key Vault URI is accessible
+          
+          Expected secret names:
+          {{ secret_names | join('\n  ') }}
+          ==========================================
+      when: 
+        - keyvault_name != ""
+        - controller_admin_password is not defined
+        - automationhub_admin_password is not defined
