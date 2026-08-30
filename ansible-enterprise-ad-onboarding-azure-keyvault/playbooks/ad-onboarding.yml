@@ -4,8 +4,9 @@
   gather_facts: no
   
   vars:
-    # Azure credentials will be retrieved from AAP credential
-    # No need to pass them as Extra Variables anymore
+    # Azure credentials will be retrieved from environment variables
+    # injected by AAP credential
+    azure_rest_api_version: "7.0"
     
     # Set default values
     enable_dry_run: false
@@ -38,16 +39,16 @@
   # Pre-tasks: Azure Key Vault Credential Retrieval
   pre_tasks:
     # ============================================
-    # Retrieve Azure credentials from AAP credential
+    # Retrieve Azure credentials from environment variables
     # ============================================
-    - name: AZURE | Retrieve credentials from AAP credential
+    - name: AZURE | Retrieve credentials from environment
       ansible.builtin.set_fact:
-        keyvault_name: "{{ lookup('credential', 'Azure Service Principal', 'keyvault_name') | default('') }}"
-        azure_client_id: "{{ lookup('credential', 'Azure Service Principal', 'client_id') | default('') }}"
-        azure_client_secret: "{{ lookup('credential', 'Azure Service Principal', 'client_secret') | default('') }}"
-        azure_tenant_id: "{{ lookup('credential', 'Azure Service Principal', 'tenant_id') | default('') }}"
-        azure_subscription_id: "{{ lookup('credential', 'Azure Service Principal', 'subscription_id') | default('') }}"
-      no_log: true
+        keyvault_name: "{{ lookup('env', 'KEYVAULT_NAME') | default('') }}"
+        azure_client_id: "{{ lookup('env', 'AZURE_CLIENT_ID') | default('') }}"
+        azure_client_secret: "{{ lookup('env', 'AZURE_CLIENT_SECRET') | default('') }}"
+        azure_tenant_id: "{{ lookup('env', 'AZURE_TENANT_ID') | default('') }}"
+        azure_subscription_id: "{{ lookup('env', 'AZURE_SUBSCRIPTION_ID') | default('') }}"
+      no_log: false
       delegate_to: localhost
       connection: local
       run_once: true
@@ -62,7 +63,7 @@
           KEYVAULT_NAME: {{ keyvault_name | default('NOT SET') }}
           Azure Client ID: {{ azure_client_id | default('NOT SET') | truncate(10) }}
           Azure Tenant ID: {{ azure_tenant_id | default('NOT SET') | truncate(10) }}
-          Credential Used: Azure Service Principal
+          Credential Source: Environment Variables
           ==========================================
       delegate_to: localhost
       connection: local
@@ -75,17 +76,19 @@
           ❌ KEY VAULT NAME NOT PROVIDED ❌
           ==========================================
           
-          Could not retrieve Azure credentials from AAP credential.
+          Could not retrieve Azure credentials from environment variables.
           
           Please ensure:
           1. Credential "Azure Service Principal" exists
-          2. Credential has all required fields:
-             - keyvault_name
-             - client_id
-             - client_secret
-             - tenant_id
-             - subscription_id
-          3. Credential is added to the Job Template
+          2. Credential is added to the Job Template
+          3. Credential Type has injector configuration with env variables
+          
+          Expected environment variables:
+          - KEYVAULT_NAME
+          - AZURE_CLIENT_ID
+          - AZURE_CLIENT_SECRET
+          - AZURE_TENANT_ID
+          - AZURE_SUBSCRIPTION_ID
           ==========================================
       when: keyvault_name == "" or keyvault_name is not defined
       delegate_to: localhost
@@ -99,11 +102,12 @@
           ❌ AZURE CREDENTIALS MISSING ❌
           ==========================================
           
-          Missing required fields in credential:
-          - Client ID: {{ 'SET' if azure_client_id != '' else 'MISSING' }}
-          - Client Secret: {{ 'SET' if azure_client_secret != '' else 'MISSING' }}
-          - Tenant ID: {{ 'SET' if azure_tenant_id != '' else 'MISSING' }}
-          - Subscription ID: {{ 'SET' if azure_subscription_id != '' else 'MISSING' }}
+          Missing required environment variables:
+          - KEYVAULT_NAME: {{ 'SET' if keyvault_name != '' else 'MISSING' }}
+          - AZURE_CLIENT_ID: {{ 'SET' if azure_client_id != '' else 'MISSING' }}
+          - AZURE_CLIENT_SECRET: {{ 'SET' if azure_client_secret != '' else 'MISSING' }}
+          - AZURE_TENANT_ID: {{ 'SET' if azure_tenant_id != '' else 'MISSING' }}
+          - AZURE_SUBSCRIPTION_ID: {{ 'SET' if azure_subscription_id != '' else 'MISSING' }}
           ==========================================
       when: 
         - keyvault_name != ""
@@ -180,7 +184,7 @@
 
     - name: AZURE | Retrieve AD credentials from Key Vault
       ansible.builtin.uri:
-        url: "https://{{ keyvault_name }}.vault.azure.net/secrets/{{ item }}?api-version={{ azure_rest_api_version | default('7.0') }}"
+        url: "https://{{ keyvault_name }}.vault.azure.net/secrets/{{ item }}?api-version={{ azure_rest_api_version }}"
         method: GET
         headers:
           Authorization: "Bearer {{ azure_access_token }}"
@@ -211,7 +215,6 @@
           ==========================================
           Results count: {{ ad_secret_result.results | length if ad_secret_result.results is defined else 0 }}
           Status codes: {{ ad_secret_result.results | map(attribute='status') | list if ad_secret_result.results is defined else [] }}
-          Secret Names: {{ ad_secret_result.results | map(attribute='item') | list if ad_secret_result.results is defined else [] }}
           ==========================================
       when: 
         - keyvault_name != ""
