@@ -4,11 +4,8 @@
   gather_facts: no
   
   vars:
-    # Azure Key Vault Configuration
-    keyvault_name_from_env: "{{ lookup('env', 'KEYVAULT_NAME') | default('') }}"
-    keyvault_name_from_var: "{{ KEYVAULT_NAME | default('') }}"
-    keyvault_name: "{{ keyvault_name_from_var if keyvault_name_from_var != '' else keyvault_name_from_env }}"
-    azure_rest_api_version: "7.0"
+    # Azure credentials will be retrieved from AAP credential
+    # No need to pass them as Extra Variables anymore
     
     # Set default values
     enable_dry_run: false
@@ -41,8 +38,20 @@
   # Pre-tasks: Azure Key Vault Credential Retrieval
   pre_tasks:
     # ============================================
-    # All Azure tasks run on localhost with local connection
+    # Retrieve Azure credentials from AAP credential
     # ============================================
+    - name: AZURE | Retrieve credentials from AAP credential
+      ansible.builtin.set_fact:
+        keyvault_name: "{{ lookup('credential', 'Azure Service Principal', 'keyvault_name') | default('') }}"
+        azure_client_id: "{{ lookup('credential', 'Azure Service Principal', 'client_id') | default('') }}"
+        azure_client_secret: "{{ lookup('credential', 'Azure Service Principal', 'client_secret') | default('') }}"
+        azure_tenant_id: "{{ lookup('credential', 'Azure Service Principal', 'tenant_id') | default('') }}"
+        azure_subscription_id: "{{ lookup('credential', 'Azure Service Principal', 'subscription_id') | default('') }}"
+      no_log: true
+      delegate_to: localhost
+      connection: local
+      run_once: true
+
     - name: AZURE | Display debug information
       ansible.builtin.debug:
         msg: |
@@ -53,6 +62,7 @@
           KEYVAULT_NAME: {{ keyvault_name | default('NOT SET') }}
           Azure Client ID: {{ azure_client_id | default('NOT SET') | truncate(10) }}
           Azure Tenant ID: {{ azure_tenant_id | default('NOT SET') | truncate(10) }}
+          Credential Used: Azure Service Principal
           ==========================================
       delegate_to: localhost
       connection: local
@@ -65,23 +75,19 @@
           ❌ KEY VAULT NAME NOT PROVIDED ❌
           ==========================================
           
-          KEYVAULT_NAME is required but was not found.
+          Could not retrieve Azure credentials from AAP credential.
           
-          Please add to Job Template Extra Variables:
-          
-          ---
-          KEYVAULT_NAME: ansible-aap-kv
-          azure_client_id: "your-client-id"
-          azure_client_secret: "your-client-secret"
-          azure_tenant_id: "your-tenant-id"
-          azure_subscription_id: "your-subscription-id"
-          server_name: "WEBAPP01"
-          application_name: "WebApp"
-          domain_name: "nat.net"
-          requester_confirmation: "YES"
-          enable_dry_run: false
+          Please ensure:
+          1. Credential "Azure Service Principal" exists
+          2. Credential has all required fields:
+             - keyvault_name
+             - client_id
+             - client_secret
+             - tenant_id
+             - subscription_id
+          3. Credential is added to the Job Template
           ==========================================
-      when: keyvault_name == ""
+      when: keyvault_name == "" or keyvault_name is not defined
       delegate_to: localhost
       connection: local
       run_once: true
@@ -93,12 +99,11 @@
           ❌ AZURE CREDENTIALS MISSING ❌
           ==========================================
           
-          Please add these variables to Extra Variables:
-          
-          azure_client_id: "your-client-id"
-          azure_client_secret: "your-client-secret"
-          azure_tenant_id: "your-tenant-id"
-          azure_subscription_id: "your-subscription-id"
+          Missing required fields in credential:
+          - Client ID: {{ 'SET' if azure_client_id != '' else 'MISSING' }}
+          - Client Secret: {{ 'SET' if azure_client_secret != '' else 'MISSING' }}
+          - Tenant ID: {{ 'SET' if azure_tenant_id != '' else 'MISSING' }}
+          - Subscription ID: {{ 'SET' if azure_subscription_id != '' else 'MISSING' }}
           ==========================================
       when: 
         - keyvault_name != ""
@@ -124,29 +129,13 @@
         timeout: 30
         status_code: 200
       register: token_response
-      no_log: false
+      no_log: true
       when: 
         - keyvault_name != ""
         - azure_client_id is defined and azure_client_id != ""
         - azure_client_secret is defined and azure_client_secret != ""
         - azure_tenant_id is defined and azure_tenant_id != ""
       ignore_errors: yes
-      delegate_to: localhost
-      connection: local
-      run_once: true
-
-    - name: AZURE | Display token response for debugging
-      ansible.builtin.debug:
-        msg: |
-          ==========================================
-          🔍 TOKEN RESPONSE DEBUG
-          ==========================================
-          Status: {{ token_response.status | default('N/A') }}
-          Response: {{ token_response.content | default('No response') | truncate(500) }}
-          ==========================================
-      when: 
-        - keyvault_name != ""
-        - token_response is defined
       delegate_to: localhost
       connection: local
       run_once: true
@@ -160,15 +149,12 @@
           
           Could not authenticate with Azure.
           Status Code: {{ token_response.status | default('N/A') }}
-          Error: {{ token_response.msg | default('Unknown error') }}
-          Response: {{ token_response.content | default('No response') }}
           
           Please verify:
           1. Client ID is correct
           2. Client Secret is correct
           3. Tenant ID is correct
           4. Service Principal has proper permissions
-          5. Network connectivity to Azure (login.microsoftonline.com)
           ==========================================
       when: 
         - keyvault_name != ""
@@ -187,14 +173,14 @@
         - token_response is defined
         - token_response.json is defined
         - token_response.json.access_token is defined
-      no_log: false
+      no_log: true
       delegate_to: localhost
       connection: local
       run_once: true
 
     - name: AZURE | Retrieve AD credentials from Key Vault
       ansible.builtin.uri:
-        url: "https://{{ keyvault_name }}.vault.azure.net/secrets/{{ item }}?api-version={{ azure_rest_api_version }}"
+        url: "https://{{ keyvault_name }}.vault.azure.net/secrets/{{ item }}?api-version={{ azure_rest_api_version | default('7.0') }}"
         method: GET
         headers:
           Authorization: "Bearer {{ azure_access_token }}"
@@ -212,17 +198,7 @@
         - azure_access_token is defined
         - azure_access_token != ""
       ignore_errors: yes
-      no_log: false
-      delegate_to: localhost
-      connection: local
-      run_once: true
-
-    - name: AZURE | Display raw secret results for debugging
-      ansible.builtin.debug:
-        var: ad_secret_result
-      when: 
-        - keyvault_name != ""
-        - ad_secret_result is defined
+      no_log: true
       delegate_to: localhost
       connection: local
       run_once: true
@@ -235,6 +211,7 @@
           ==========================================
           Results count: {{ ad_secret_result.results | length if ad_secret_result.results is defined else 0 }}
           Status codes: {{ ad_secret_result.results | map(attribute='status') | list if ad_secret_result.results is defined else [] }}
+          Secret Names: {{ ad_secret_result.results | map(attribute='item') | list if ad_secret_result.results is defined else [] }}
           ==========================================
       when: 
         - keyvault_name != ""
@@ -244,26 +221,30 @@
       connection: local
       run_once: true
 
-    - name: AZURE | Set AD credentials from retrieved secrets
+    - name: AZURE | Set individual AD credentials
       ansible.builtin.set_fact:
-        ad_username: "{{ (ad_secret_result.results | selectattr('item', 'equalto', 'ad-domain-admin-username') | first).json.value }}"
-        ad_password: "{{ (ad_secret_result.results | selectattr('item', 'equalto', 'ad-domain-admin-password') | first).json.value }}"
-        ad_domain_name: "{{ (ad_secret_result.results | selectattr('item', 'equalto', 'ad-domain-name') | first).json.value }}"
+        ad_username: "{{ (ad_secret_result.results | selectattr('item', 'equalto', 'ad-domain-admin-username') | first | default({})).json.value | default('') }}"
+        ad_password: "{{ (ad_secret_result.results | selectattr('item', 'equalto', 'ad-domain-admin-password') | first | default({})).json.value | default('') }}"
+        ad_domain_name: "{{ (ad_secret_result.results | selectattr('item', 'equalto', 'ad-domain-name') | first | default({})).json.value | default('') }}"
       when: 
         - keyvault_name != ""
         - ad_secret_result is defined
         - ad_secret_result.results is defined
-      no_log: false
+      no_log: true
       delegate_to: localhost
       connection: local
       run_once: true
 
-    - name: AZURE | Display extracted credentials (non-sensitive)
+    - name: AZURE | Display extracted credentials
       ansible.builtin.debug:
         msg:
-          - "Username extracted: {{ ad_username | default('NOT FOUND') }}"
-          - "Domain extracted: {{ ad_domain_name | default('NOT FOUND') }}"
-          - "Password extracted: {{ 'YES' if ad_password is defined else 'NO' }}"
+          - "=========================================="
+          - "🔍 EXTRACTED CREDENTIALS"
+          - "=========================================="
+          - "Username: {{ ad_username | default('NOT FOUND') }}"
+          - "Domain: {{ ad_domain_name | default('NOT FOUND') }}"
+          - "Password: {{ 'SET' if ad_password is defined and ad_password != '' else 'NOT FOUND' }}"
+          - "=========================================="
       when: 
         - keyvault_name != ""
       delegate_to: localhost
@@ -283,11 +264,6 @@
           1. ad-domain-admin-username
           2. ad-domain-admin-password
           3. ad-domain-name
-          
-          Current values:
-          - Username: {{ ad_username | default('MISSING') }}
-          - Password: {{ 'SET' if ad_password is defined else 'MISSING' }}
-          - Domain: {{ ad_domain_name | default('MISSING') }}
           ==========================================
       when: 
         - keyvault_name != ""
@@ -307,7 +283,9 @@
       when: 
         - keyvault_name != ""
         - ad_username is defined
+        - ad_username != ''
         - ad_domain_name is defined
+        - ad_domain_name != ''
       delegate_to: localhost
       connection: local
       run_once: true
@@ -328,10 +306,12 @@
         ansible_winrm_read_timeout_sec: 120
         ansible_become_method: runas
         ansible_become_user: SYSTEM
-      no_log: false
+      no_log: true
       when: 
         - ad_username is defined
+        - ad_username != ''
         - ad_password is defined
+        - ad_password != ''
 
     # NOW we can gather facts after connection is set
     - name: CONNECTION | Gather facts from Windows host
@@ -340,7 +320,9 @@
           - min
       when: 
         - ad_username is defined
+        - ad_username != ''
         - ad_password is defined
+        - ad_password != ''
 
     # Validation Tasks
     - name: VALIDATION | Validate required parameters
