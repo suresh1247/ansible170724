@@ -4,7 +4,11 @@
   connection: local
   gather_facts: yes
   vars:
-    keyvault_name: "{{ lookup('env', 'KEYVAULT_NAME') | default('', true) }}"
+    # Try multiple ways to get KEYVAULT_NAME
+    keyvault_name_from_env: "{{ lookup('env', 'KEYVAULT_NAME') | default('') }}"
+    keyvault_name_from_var: "{{ KEYVAULT_NAME | default('') }}"
+    keyvault_name: "{{ keyvault_name_from_var if keyvault_name_from_var != '' else keyvault_name_from_env }}"
+    
     secret_names:
       - "ansible-tower-license"
       - "controller-admin-password"
@@ -21,6 +25,17 @@
     azure_rest_api_version: "7.0"
 
   tasks:
+    - name: AZURE | Display debug info
+      ansible.builtin.debug:
+        msg: |
+          ==========================================
+          🔍 DEBUG INFORMATION
+          ==========================================
+          KEYVAULT_NAME from var: {{ KEYVAULT_NAME | default('NOT SET') }}
+          KEYVAULT_NAME from env: {{ lookup('env', 'KEYVAULT_NAME') | default('NOT SET') }}
+          KEYVAULT_NAME final: {{ keyvault_name | default('NOT SET') }}
+          ==========================================
+
     - name: AZURE | Validate Azure credentials are provided
       ansible.builtin.debug:
         msg: |
@@ -28,10 +43,34 @@
           Client ID: {{ azure_client_id | default('MISSING') | truncate(10) }}
           Tenant ID: {{ azure_tenant_id | default('MISSING') | truncate(10) }}
           Subscription: {{ azure_subscription_id | default('MISSING') | truncate(10) }}
+          Key Vault: {{ keyvault_name | default('MISSING') }}
       when: 
         - azure_client_id is defined
         - azure_tenant_id is defined
         - azure_subscription_id is defined
+        - keyvault_name != ""
+
+    - name: AZURE | Fail if Key Vault name not provided
+      ansible.builtin.fail:
+        msg: |
+          ==========================================
+          ❌ KEY VAULT NAME NOT PROVIDED ❌
+          ==========================================
+          
+          KEYVAULT_NAME is required but was not found.
+          
+          Please add to Job Template Extra Variables:
+          
+          ---
+          KEYVAULT_NAME: ansible-aap-kv
+          azure_client_id: "4de43aec-3cfe-4235-a853-c542e48371bb"
+          azure_client_secret: "c_l8Q~mdB3L0sUjB~-4oF~sm~igc0KexyDGRfbet"
+          azure_tenant_id: "84b7f57c-6b05-41a1-9915-d17b5ed9000e"
+          azure_subscription_id: "264c88cf-3a13-4f74-b8e3-b3976a5f2a30"
+          enable_dry_run: false
+          
+          ==========================================
+      when: keyvault_name == ""
 
     - name: AZURE | Verify credentials are set
       ansible.builtin.fail:
@@ -48,6 +87,7 @@
           azure_subscription_id: "264c88cf-3a13-4f74-b8e3-b3976a5f2a30"
           ==========================================
       when: 
+        - keyvault_name != ""
         - azure_client_id is not defined or azure_client_id == ''
         - azure_client_secret is not defined or azure_client_secret == ''
         - azure_tenant_id is not defined or azure_tenant_id == ''
@@ -68,7 +108,11 @@
         status_code: 200
       register: token_response
       no_log: true
-      when: keyvault_name != ""
+      when: 
+        - keyvault_name != ""
+        - azure_client_id is defined and azure_client_id != ""
+        - azure_client_secret is defined and azure_client_secret != ""
+        - azure_tenant_id is defined and azure_tenant_id != ""
       ignore_errors: yes
 
     - name: AZURE | Fail if token retrieval failed
@@ -121,8 +165,22 @@
       when: 
         - keyvault_name != ""
         - azure_access_token is defined
+        - azure_access_token != ""
       ignore_errors: yes
       no_log: true
+
+    - name: AZURE | Debug secret retrieval status
+      ansible.builtin.debug:
+        msg: |
+          Secret: {{ item.item }}
+          Status: {{ item.status | default('N/A') }}
+          Found: {{ 'YES' if item.json is defined and item.json.value is defined else 'NO' }}
+      loop: "{{ az_secret_result.results }}"
+      when: 
+        - keyvault_name != ""
+        - az_secret_result is defined
+        - az_secret_result.results is defined
+      changed_when: false
 
     - name: AZURE | Set facts from retrieved secrets
       ansible.builtin.set_fact:
@@ -157,7 +215,9 @@
           - EDA Secret Key: {{ '✅' if eda_secret_key is defined else '❌' }}
           - Gateway Secret Key: {{ '✅' if gateway_secret_key is defined else '❌' }}
           ==========================================
-      when: keyvault_name != ""
+      when: 
+        - keyvault_name != ""
+        - controller_admin_password is defined or automationhub_admin_password is defined
       changed_when: false
 
     - name: AZURE | Fail if required secrets not retrieved
@@ -295,18 +355,6 @@
       when: 
         - keyvault_name != ""
         - controller_admin_password is defined
-
-    - name: AZURE | Fail if Key Vault not provided
-      ansible.builtin.fail:
-        msg: |
-          ==========================================
-          ❌ KEY VAULT NAME NOT PROVIDED ❌
-          ==========================================
-          
-          Add to Job Template Extra Variables:
-          KEYVAULT_NAME: ansible-aap-kv
-          ==========================================
-      when: keyvault_name == ""
 
     - name: AZURE | Logout cleanup (no-op for REST API)
       ansible.builtin.debug:
