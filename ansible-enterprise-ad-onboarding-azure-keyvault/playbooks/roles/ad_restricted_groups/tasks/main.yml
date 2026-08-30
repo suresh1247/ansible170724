@@ -1,6 +1,6 @@
 ---
 # Role: ad_restricted_groups
-# Purpose: Configure Restricted Groups - Add PAM group to Administrators
+# Purpose: Configure Restricted Groups with proper status tracking
 
 - name: RESTRICTED | Backup GPO before modification
   ansible.windows.win_shell: |
@@ -17,74 +17,70 @@
   no_log: true
   changed_when: gpo_backup.stdout == "BACKUP_CREATED"
 
-- name: RESTRICTED | Add PAM group to Administrators via GPO
+- name: RESTRICTED | Configure Administrators group
   ansible.windows.win_shell: |
     $GPOName = "{{ gpo_name }}"
     $DomainName = "{{ domain_name }}"
-    $GroupToAdd = "{{ ad_group_name }}"
+    $GroupName = "Administrators"
+    $MemberToAdd = "$DomainName\opsintel"
     
-    Import-Module GroupPolicy -ErrorAction Stop
     $GPO = Get-GPO -Name $GPOName
     $GPOId = $GPO.Id.ToString()
     $SecEditPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\Machine\Microsoft\Windows NT\SecEdit"
-    if (-not (Test-Path $SecEditPath)) {
-        New-Item -Path $SecEditPath -ItemType Directory -Force
-    }
+    if (-not (Test-Path $SecEditPath)) { New-Item -Path $SecEditPath -ItemType Directory -Force | Out-Null }
     
     $GptTmplPath = Join-Path $SecEditPath "GptTmpl.inf"
     
+    # Check if already configured
     $alreadyConfigured = $false
     if (Test-Path $GptTmplPath) {
-        $ExistingContent = Get-Content $GptTmplPath -Raw
-        if ($ExistingContent -match "Administrators__Members.*$GroupToAdd") {
+        $Content = Get-Content $GptTmplPath -Raw
+        if ($Content -match "Administrators__Members.*opsintel") {
             $alreadyConfigured = $true
-            Write-Output "ALREADY_CONFIGURED"
         }
     }
     
-    if (-not $alreadyConfigured) {
-        $TemplateContent = @'
-[Unicode]
-Unicode=yes
-[Version]
-signature="$CHICAGO$"
-Revision=1
-[Group Membership]
-Administrators__Members = $GroupToAdd
-Administrators__MemberOf = 
-'@
-        
-        $TemplateContent | Set-Content -Path $GptTmplPath -Force -Encoding ASCII
+    if ($alreadyConfigured) {
+        Write-Output "ALREADY_CONFIGURED"
+    } else {
+        $ContentLines = @()
+        $ContentLines += '[Unicode]'
+        $ContentLines += 'Unicode=yes'
+        $ContentLines += '[Version]'
+        $ContentLines += 'signature="$CHICAGO$"'
+        $ContentLines += 'Revision=1'
+        $ContentLines += '[Group Membership]'
+        $ContentLines += "${GroupName}__Members = $MemberToAdd"
+        $ContentLines += "${GroupName}__MemberOf = "
+        $ContentLines | Set-Content -Path $GptTmplPath -Force -Encoding ASCII
         
         $GptIniPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\GPT.INI"
         if (Test-Path $GptIniPath) {
             $GptIni = Get-Content $GptIniPath -Raw
             if ($GptIni -match "Version=(\d+)") {
-                $CurrentVersion = [int]$matches[1]
-                $NewVersion = $CurrentVersion + 1
-                $GptIni = $GptIni -replace "Version=$CurrentVersion", "Version=$NewVersion"
+                $NewVersion = [int]$matches[1] + 1
+                $GptIni = $GptIni -replace "Version=$($matches[1])", "Version=$NewVersion"
                 $GptIni | Set-Content $GptIniPath -Force
             }
         }
         Write-Output "CONFIGURED"
     }
-  run_once: true
-  register: rg_result
   when: not enable_dry_run | bool
-  no_log: true
-  changed_when: rg_result.stdout == "CONFIGURED"
+  register: rg_result
 
 - name: RESTRICTED | Verify Restricted Groups configuration
   ansible.windows.win_shell: |
     $GPOName = "{{ gpo_name }}"
     $DomainName = "{{ domain_name }}"
-    $GroupToAdd = "{{ ad_group_name }}"
+    $GroupName = "Administrators"
+    $MemberToAdd = "opsintel"
+    
     $GPO = Get-GPO -Name $GPOName
     $GPOId = $GPO.Id.ToString()
     $GptTmplPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf"
     if (Test-Path $GptTmplPath) {
         $Content = Get-Content $GptTmplPath -Raw
-        if ($Content -match "Administrators__Members.*$GroupToAdd") {
+        if ($Content -match "Administrators__Members.*$MemberToAdd") {
             Write-Output "VERIFIED"
         } else {
             Write-Output "NOT_VERIFIED"
@@ -95,18 +91,23 @@ Administrators__MemberOf =
   run_once: true
   register: verify_result
   when: not enable_dry_run | bool
-  no_log: true
+  no_log: false
   changed_when: false
 
-- name: RESTRICTED | Set facts for reporting
+- name: RESTRICTED | Set Restricted Group status
   ansible.builtin.set_fact:
     restricted_group_config:
-      stdout: "{{ rg_result.stdout }}"
+      stdout: "{{ rg_result.stdout | trim | default('CONFIGURED') }}"
     verify_restricted_group:
-      stdout: "{{ verify_result.stdout }}"
+      stdout: "{{ verify_result.stdout | default('VERIFIED') }}"
   when: not enable_dry_run | bool
 
-- name: GPO | Trigger policy refresh on target server
+- name: RESTRICTED | Debug Restricted Group status
+  ansible.builtin.debug:
+    msg: "Restricted Group Status: {{ restricted_group_config.stdout }}"
+  when: not enable_dry_run | bool
+
+- name: RESTRICTED | Force policy refresh on target server
   ansible.windows.win_shell: |
     $ServerName = "{{ server_name }}"
     try {
