@@ -2,23 +2,8 @@
 - name: ENTERPRISE ACTIVE DIRECTORY ONBOARDING
   hosts: domain_controllers
   gather_facts: no
-  connection: winrm
-  become: true
-  become_method: runas
-  become_user: SYSTEM
   
   vars:
-    # Force WinRM settings
-    ansible_connection: winrm
-    ansible_winrm_transport: ntlm
-    ansible_winrm_server_cert_validation: ignore
-    ansible_port: 5985
-    ansible_winrm_operation_timeout_sec: 60
-    ansible_winrm_read_timeout_sec: 120
-    ansible_winrm_message_encryption: always
-    ansible_become_method: runas
-    ansible_become_user: SYSTEM
-    
     # Azure Key Vault Configuration
     keyvault_name_from_env: "{{ lookup('env', 'KEYVAULT_NAME') | default('') }}"
     keyvault_name_from_var: "{{ KEYVAULT_NAME | default('') }}"
@@ -55,29 +40,22 @@
 
   # Pre-tasks: Azure Key Vault Credential Retrieval
   pre_tasks:
-    # CRITICAL: First, set local connection for Azure tasks
-    - name: CONNECTION | Set local connection for Azure tasks
-      ansible.builtin.set_fact:
-        ansible_connection_local: local
-      delegate_to: localhost
-      run_once: true
-      changed_when: false
-
+    # ============================================
+    # All Azure tasks run on localhost with local connection
+    # ============================================
     - name: AZURE | Display debug information
       ansible.builtin.debug:
         msg: |
           ==========================================
           🔍 CONNECTION DEBUG
           ==========================================
-          Connection Type: {{ ansible_connection }}
           Target Host: {{ inventory_hostname }}
-          WinRM Port: {{ ansible_port }}
-          Transport: {{ ansible_winrm_transport }}
           KEYVAULT_NAME: {{ keyvault_name | default('NOT SET') }}
           Azure Client ID: {{ azure_client_id | default('NOT SET') | truncate(10) }}
           Azure Tenant ID: {{ azure_tenant_id | default('NOT SET') | truncate(10) }}
           ==========================================
       delegate_to: localhost
+      connection: local
       run_once: true
 
     - name: AZURE | Fail if Key Vault name not provided
@@ -105,6 +83,7 @@
           ==========================================
       when: keyvault_name == ""
       delegate_to: localhost
+      connection: local
       run_once: true
 
     - name: AZURE | Verify Azure credentials are set
@@ -128,6 +107,7 @@
         - azure_tenant_id is not defined or azure_tenant_id == ''
         - azure_subscription_id is not defined or azure_subscription_id == ''
       delegate_to: localhost
+      connection: local
       run_once: true
 
     - name: AZURE | Get Azure Access Token
@@ -152,6 +132,7 @@
         - azure_tenant_id is defined and azure_tenant_id != ""
       ignore_errors: yes
       delegate_to: localhost
+      connection: local
       run_once: true
 
     - name: AZURE | Display token response for debugging
@@ -167,6 +148,7 @@
         - keyvault_name != ""
         - token_response is defined
       delegate_to: localhost
+      connection: local
       run_once: true
 
     - name: AZURE | Fail if token retrieval failed
@@ -186,6 +168,7 @@
           2. Client Secret is correct
           3. Tenant ID is correct
           4. Service Principal has proper permissions
+          5. Network connectivity to Azure (login.microsoftonline.com)
           ==========================================
       when: 
         - keyvault_name != ""
@@ -193,6 +176,7 @@
         - token_response.status is defined
         - token_response.status != 200
       delegate_to: localhost
+      connection: local
       run_once: true
 
     - name: AZURE | Set access token fact
@@ -205,6 +189,7 @@
         - token_response.json.access_token is defined
       no_log: true
       delegate_to: localhost
+      connection: local
       run_once: true
 
     - name: AZURE | Retrieve AD credentials from Key Vault
@@ -229,6 +214,7 @@
       ignore_errors: yes
       no_log: false
       delegate_to: localhost
+      connection: local
       run_once: true
 
     - name: AZURE | Display secret retrieval status
@@ -244,6 +230,7 @@
         - ad_secret_result is defined
         - ad_secret_result.results is defined
       delegate_to: localhost
+      connection: local
       run_once: true
 
     - name: AZURE | Set AD credentials from retrieved secrets
@@ -257,6 +244,7 @@
         - ad_secret_result.results is defined
       no_log: true
       delegate_to: localhost
+      connection: local
       run_once: true
 
     - name: AZURE | Fail if AD credentials not retrieved
@@ -268,7 +256,7 @@
           
           Could not retrieve AD credentials from Azure Key Vault: {{ keyvault_name }}
           
-          Please ensure these secrets exist:
+          Please ensure these secrets exist in Key Vault:
           1. ad-domain-admin-username
           2. ad-domain-admin-password
           3. ad-domain-name
@@ -279,6 +267,7 @@
         - ad_password is not defined or ad_password == ''
         - ad_domain_name is not defined or ad_domain_name == ''
       delegate_to: localhost
+      connection: local
       run_once: true
 
     - name: AZURE | Display credential retrieval status
@@ -292,10 +281,13 @@
         - ad_username is defined
         - ad_domain_name is defined
       delegate_to: localhost
+      connection: local
       run_once: true
       no_log: false
 
-    # CRITICAL: Now set WinRM connection variables for the Windows host
+    # ============================================
+    # NOW Set WinRM connection for Windows host
+    # ============================================
     - name: CONNECTION | Set WinRM connection variables for Windows host
       ansible.builtin.set_fact:
         ansible_user: "{{ ad_username }}"
@@ -523,4 +515,5 @@
         msg: "✓ Azure REST API session completed"
       when: keyvault_name != ""
       delegate_to: localhost
+      connection: local
       run_once: true
