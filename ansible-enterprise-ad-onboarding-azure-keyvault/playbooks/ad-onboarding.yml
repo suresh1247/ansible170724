@@ -1,19 +1,29 @@
 ---
 - name: ENTERPRISE ACTIVE DIRECTORY ONBOARDING
   hosts: domain_controllers
-  gather_facts: yes
-  gather_subset:
-    - min
+  gather_facts: no  # Disable automatic fact gathering
+  connection: winrm
   become: true
   become_method: runas
   become_user: SYSTEM
   
   vars:
+    # Force WinRM settings
+    ansible_connection: winrm
+    ansible_winrm_transport: ntlm
+    ansible_winrm_server_cert_validation: ignore
+    ansible_port: 5985
+    ansible_winrm_operation_timeout_sec: 60
+    ansible_winrm_read_timeout_sec: 120
+    ansible_winrm_message_encryption: always
+    ansible_become_method: runas
+    ansible_become_user: SYSTEM
+    
     # Azure Key Vault Configuration
     keyvault_name: "{{ lookup('env', 'KEYVAULT_NAME') | default(KEYVAULT_NAME | default('')) }}"
     azure_rest_api_version: "7.0"
     
-    # Set default values for variables (no recursion)
+    # Set default values
     enable_dry_run: false
     ad_retries: 3
     ad_delay: 5
@@ -43,17 +53,20 @@
 
   # Pre-tasks: Azure Key Vault Credential Retrieval
   pre_tasks:
+    # All Azure tasks run on localhost first
     - name: AZURE | Display debug information
       ansible.builtin.debug:
         msg: |
           ==========================================
-          🔍 AZURE KEY VAULT DEBUG
+          🔍 CONNECTION DEBUG
           ==========================================
-          KEYVAULT_NAME: {{ keyvault_name | default('NOT SET') }}
+          Connection Type: {{ ansible_connection }}
           Target Host: {{ inventory_hostname }}
-          WinRM Port: {{ ansible_port | default('5985') }}
+          WinRM Port: {{ ansible_port }}
+          Transport: {{ ansible_winrm_transport }}
           ==========================================
-      when: keyvault_name != ""
+      delegate_to: localhost
+      run_once: true
 
     - name: AZURE | Fail if Key Vault name not provided
       ansible.builtin.fail:
@@ -73,6 +86,8 @@
           enable_dry_run: false
           ==========================================
       when: keyvault_name == ""
+      delegate_to: localhost
+      run_once: true
 
     - name: AZURE | Verify Azure credentials are set
       ansible.builtin.fail:
@@ -94,6 +109,8 @@
         - azure_client_secret is not defined or azure_client_secret == ''
         - azure_tenant_id is not defined or azure_tenant_id == ''
         - azure_subscription_id is not defined or azure_subscription_id == ''
+      delegate_to: localhost
+      run_once: true
 
     - name: AZURE | Get Azure Access Token
       ansible.builtin.uri:
@@ -229,8 +246,8 @@
       run_once: true
       no_log: false
 
-    # Set WinRM connection variables for the Windows host
-    - name: CONNECTION | Set WinRM connection variables
+    # CRITICAL: Set WinRM connection variables for the Windows host
+    - name: CONNECTION | Set WinRM connection variables for Windows host
       ansible.builtin.set_fact:
         ansible_user: "{{ ad_username }}"
         ansible_password: "{{ ad_password }}"
@@ -243,6 +260,15 @@
         ansible_become_method: runas
         ansible_become_user: SYSTEM
       no_log: true
+      when: 
+        - ad_username is defined
+        - ad_password is defined
+
+    # NOW we can gather facts after connection is set
+    - name: CONNECTION | Gather facts from Windows host
+      ansible.builtin.setup:
+        gather_subset:
+          - min
       when: 
         - ad_username is defined
         - ad_password is defined
