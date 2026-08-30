@@ -1,10 +1,7 @@
 ---
-# Role: ad_computer_management
-# Purpose: Check and move server in Active Directory
-
-- name: SERVER | Include server check tasks
+- name: SERVER | Include server check
   ansible.builtin.include_tasks: check_server.yml
 
-- name: SERVER | Include server move tasks
+- name: SERVER | Include server move
   ansible.builtin.include_tasks: move_server.yml
   when: server_exists and not enable_dry_run | bool

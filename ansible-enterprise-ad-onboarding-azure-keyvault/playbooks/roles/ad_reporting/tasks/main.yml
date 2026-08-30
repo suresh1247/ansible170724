@@ -1,66 +1,31 @@
 ---
-# Role: ad_reporting
-# Purpose: Generate final summary report
-
-- name: REPORT | Calculate operation duration
+- name: REPORT | Calculate duration
   ansible.builtin.set_fact:
-    operation_duration: "{{ (ansible_date_time.epoch | int - operation_start_time | int) if operation_start_time is defined else 0 }}"
+    operation_duration: "{{ (ansible_date_time.epoch | int - operation_start_time | int) }}"
 
 - name: REPORT | Final Status Report
   ansible.builtin.debug:
     msg:
       - "=========================================="
-      - "✅ ACTIVE DIRECTORY ONBOARDING COMPLETED"
+      - "✅ AD ONBOARDING COMPLETED"
       - "=========================================="
-      - "Operation ID: {{ operation_id | default('N/A') }}"
-      - "Duration: {{ operation_duration | default(0) }} seconds"
+      - "Operation ID: {{ operation_id }}"
+      - "Duration: {{ operation_duration }} seconds"
       - "Dry Run: {{ 'YES' if enable_dry_run else 'NO' }}"
       - ""
-      - "Azure Key Vault:"
-      - "  Key Vault Name: {{ keyvault_name | default('N/A') }}"
-      - "  Status: Connected"
+      - "Server: {{ server_name }}"
+      - "Domain: {{ domain_name }}"
+      - "Application: {{ application_name }}"
+      - "Server Type: {{ server_type }}"
+      - "Target OU: {{ target_ou_dn }}"
       - ""
-      - "Server Details:"
-      - "  Server Name: {{ server_name | default('N/A') }}"
-      - "  Domain: {{ domain_name | default('N/A') }}"
-      - "  Application: {{ application_name | default('N/A') }}"
-      - "  Server Type: {{ server_type | default('NON-SQL') }}"
-      - "  Target OU: {{ target_ou_dn | default('N/A') }}"
-      - ""
-      - "OU Status:"
-      - "  LKM OU: {{ 'CREATED' if lkm_ou_result.changed else 'EXISTS' }}"
-      - "  Servers OU: {{ 'CREATED' if servers_ou_result.changed else 'EXISTS' }}"
-      - "  SQL OU: {{ 'CREATED' if sql_ou_result.changed else 'EXISTS' if server_type is defined and server_type == 'SQL' else 'SKIPPED' }}"
-      - "  Application OU: {{ 'CREATED' if app_ou_result.changed else 'EXISTS' }}"
-      - "  PAM Groups OU: {{ 'CREATED' if pam_ou_result.changed else 'EXISTS' }}"
-      - ""
-      - "Server Status:"
-      - "  Server in AD: {{ 'YES' if server_exists | default(false) else 'NO' }}"
-      - "  Server Move: {{ 'YES' if server_moved | default(false) else 'NO' }}"
-      - "  Current Location: {{ server_canonical | default('N/A') }}"
-      - "  Confirmation Provided: {{ requester_confirmation | upper }}"
-      - ""
-      - "Security Configuration:"
-      - "  PAM Group: {{ ad_group_name | default('N/A') }}"
-      - "  PAM Group Status: {{ group_creation.stdout | default('EXISTS') }}"
-      - "  opsintel User: {{ opsintel_add.stdout | default('N/A') }}"
-      - "  Restricted Group: Administrators"
-      - "  Restricted Group Member: {{ ad_group_name | default('N/A') }} (PAM Group)"
-      - "  Restricted Group Status: {{ restricted_group_config.stdout | default('CONFIGURED') }}"
-      - "  Verification: {{ verify_restricted_group.stdout | default('VERIFIED') }}"
-      - ""
-      - "GPO Status:"
-      - "  GPO Name: {{ gpo_name | default('N/A') }}"
-      - "  GPO Status: {{ gpo_creation.stdout | default('EXISTS') }}"
-      - "  GPO Link: {{ gpo_link.stdout | default('ALREADY_LINKED') }}"
-      - "  GPO Backup: {{ gpo_backup.stdout | default('N/A') }}"
-      - "  GPO Refresh: {{ gpupdate_result.stdout | default('N/A') }}"
-      - ""
+      - "OU Status: {{ ou_creation.stdout }}"
+      - "PAM Group: {{ ad_group_name }} ({{ group_creation.stdout }})"
+      - "opsintel User: {{ opsintel_add.stdout }}"
+      - "GPO: {{ gpo_name }} ({{ gpo_creation.stdout }})"
+      - "GPO Link: {{ gpo_link.stdout }}"
+      - "Restricted Group: {{ restricted_group_config.stdout }}"
+      - "Verification: {{ verify_restricted_group.stdout }}"
+      - "Server Move: {{ 'YES' if server_moved | default(false) else 'NO' }}"
+      - "GPUpdate: {{ gpupdate_result.stdout }}"
       - "=========================================="
-
-- name: REPORT | Fail if server not found
-  ansible.builtin.fail:
-    msg: "Server '{{ server_name }}' not found in Active Directory. Onboarding stopped."
-  when: 
-    - not server_exists | default(false)
-    - requester_confirmation | upper == 'NO'

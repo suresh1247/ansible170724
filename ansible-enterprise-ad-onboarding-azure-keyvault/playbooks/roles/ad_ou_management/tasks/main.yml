@@ -1,54 +1,35 @@
 ---
-# Role: ad_ou_management
-# Purpose: Create OU hierarchy using microsoft.ad.ou module
-
-- name: OU | Display target OU path
-  ansible.builtin.debug:
-    msg: "Target OU path: {{ target_ou_dn }}"
-
-- name: OU | Ensure LKM OU exists
+- name: OU | Create OU hierarchy
   microsoft.ad.ou:
-    name: LKM
-    path: "{{ ou_base_dn }}"
-    description: "LKM Root OU for server management"
+    name: "{{ item.name }}"
+    path: "{{ item.path }}"
+    description: "{{ item.desc }}"
     state: present
+  loop:
+    - { name: "LKM", path: "{{ ou_base_dn }}", desc: "LKM Root OU" }
+    - { name: "Servers", path: "OU=LKM,{{ ou_base_dn }}", desc: "Server OUs" }
   run_once: true
-  register: lkm_ou_result
+  register: ou_results
   when: not enable_dry_run | bool
 
-- name: OU | Ensure Servers OU exists
-  microsoft.ad.ou:
-    name: Servers
-    path: "OU=LKM,{{ ou_base_dn }}"
-    description: "Container for all server OUs"
-    state: present
-  run_once: true
-  register: servers_ou_result
-  when: not enable_dry_run | bool
-
-- name: OU | Ensure SQL OU exists if needed
+- name: OU | Create SQL OU if needed
   microsoft.ad.ou:
     name: SQL
     path: "OU=Servers,OU=LKM,{{ ou_base_dn }}"
-    description: "Container for SQL server OUs"
+    description: "SQL Server OU"
     state: present
   run_once: true
   register: sql_ou_result
-  when: server_type is defined and server_type == "SQL" and not enable_dry_run | bool
+  when: server_type == "SQL" and not enable_dry_run | bool
 
-- name: OU | Ensure Application OU exists
+- name: OU | Create application OU
   microsoft.ad.ou:
     name: "{{ application_name }}"
-    path: "{{ 'OU=SQL,OU=Servers,OU=LKM' if server_type is defined and server_type == 'SQL' else 'OU=Servers,OU=LKM' }},{{ ou_base_dn }}"
-    description: "OU for {{ application_name }} application servers"
+    path: "{{ 'OU=SQL,OU=Servers,OU=LKM' if server_type == 'SQL' else 'OU=Servers,OU=LKM' }},{{ ou_base_dn }}"
+    description: "{{ application_name }} application servers"
     state: present
   run_once: true
   register: app_ou_result
-  when: not enable_dry_run | bool
-
-- name: OU | Verify Application OU was created
-  ansible.builtin.debug:
-    msg: "Application OU '{{ application_name }}' created status: {{ 'CREATED' if app_ou_result.changed else 'EXISTS' }}"
   when: not enable_dry_run | bool
 
 - name: OU | Set fact for reporting

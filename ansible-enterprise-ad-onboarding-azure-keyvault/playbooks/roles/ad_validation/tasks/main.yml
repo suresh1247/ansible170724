@@ -1,8 +1,5 @@
 ---
-# Role: ad_validation
-# Purpose: Validate input parameters and prerequisites
-
-- name: VALIDATION | Require explicit approval before making AD changes
+- name: VALIDATION | Require explicit approval
   ansible.builtin.assert:
     that:
       - requester_confirmation | upper == 'YES'
@@ -10,43 +7,12 @@
       ==========================================
       ❌ CHANGE APPROVAL REQUIRED ❌
       ==========================================
-      Change approval was not confirmed.
-      requester_confirmation must be YES.
+      requester_confirmation must be YES
       Current value: {{ requester_confirmation }}
       ==========================================
     success_msg: "✓ Change approval confirmed"
 
-- name: VALIDATION | Validate required parameters
-  ansible.builtin.assert:
-    that:
-      - server_name is defined
-      - application_name is defined
-      - domain_name is defined
-    fail_msg: "Missing required parameters"
-    success_msg: "✓ Required parameters validation passed"
-
-- name: VALIDATION | Validate server name format
-  ansible.builtin.assert:
-    that:
-      - server_name is match(server_name_pattern)
-    fail_msg: "Invalid server name '{{ server_name }}'"
-    success_msg: "✓ Server name validation passed"
-
-- name: VALIDATION | Validate application name format
-  ansible.builtin.assert:
-    that:
-      - application_name is match(app_name_pattern)
-    fail_msg: "Invalid application name '{{ application_name }}'"
-    success_msg: "✓ Application name validation passed"
-
-- name: VALIDATION | Validate domain name format
-  ansible.builtin.assert:
-    that:
-      - domain_name is match(domain_name_pattern)
-    fail_msg: "Invalid domain name format: {{ domain_name }}"
-    success_msg: "✓ Domain name validation passed"
-
-- name: VALIDATION | Check if server exists in AD
+- name: VALIDATION | Verify server exists
   ansible.builtin.assert:
     that:
       - server_exists | bool
@@ -55,10 +21,5 @@
       ❌ SERVER NOT FOUND ❌
       ==========================================
       Server '{{ server_name }}' was not found in Active Directory.
-      
-      Please verify:
-      1. The server name is correct
-      2. The server is joined to the domain
-      3. The server exists in Active Directory
       ==========================================
     success_msg: "✓ Server found in Active Directory"

@@ -1,22 +1,4 @@
 ---
-# Role: ad_restricted_groups
-# Purpose: Configure Restricted Groups with proper status tracking
-
-- name: RESTRICTED | Backup GPO before modification
-  ansible.windows.win_shell: |
-    $GPOName = "{{ gpo_name }}"
-    $BackupPath = "C:\\GPO_Backups"
-    if (-not (Test-Path $BackupPath)) {
-        New-Item -Path $BackupPath -ItemType Directory -Force
-    }
-    Backup-GPO -Name $GPOName -Path $BackupPath -Comment "Backup before Restricted Groups configuration - {{ operation_id }}"
-    Write-Output "BACKUP_CREATED"
-  run_once: true
-  register: gpo_backup
-  when: not enable_dry_run | bool
-  no_log: true
-  changed_when: gpo_backup.stdout == "BACKUP_CREATED"
-
 - name: RESTRICTED | Configure Administrators group
   ansible.windows.win_shell: |
     $GPOName = "{{ gpo_name }}"
@@ -31,7 +13,6 @@
     
     $GptTmplPath = Join-Path $SecEditPath "GptTmpl.inf"
     
-    # Check if already configured
     $alreadyConfigured = $false
     if (Test-Path $GptTmplPath) {
         $Content = Get-Content $GptTmplPath -Raw
@@ -65,22 +46,19 @@
         }
         Write-Output "CONFIGURED"
     }
-  when: not enable_dry_run | bool
   register: rg_result
+  when: not enable_dry_run | bool
 
-- name: RESTRICTED | Verify Restricted Groups configuration
+- name: RESTRICTED | Verify configuration
   ansible.windows.win_shell: |
     $GPOName = "{{ gpo_name }}"
     $DomainName = "{{ domain_name }}"
-    $GroupName = "Administrators"
-    $MemberToAdd = "opsintel"
-    
     $GPO = Get-GPO -Name $GPOName
     $GPOId = $GPO.Id.ToString()
     $GptTmplPath = "C:\Windows\SYSVOL\sysvol\$DomainName\Policies\{$GPOId}\Machine\Microsoft\Windows NT\SecEdit\GptTmpl.inf"
     if (Test-Path $GptTmplPath) {
         $Content = Get-Content $GptTmplPath -Raw
-        if ($Content -match "Administrators__Members.*$MemberToAdd") {
+        if ($Content -match "Administrators__Members.*opsintel") {
             Write-Output "VERIFIED"
         } else {
             Write-Output "NOT_VERIFIED"
@@ -88,26 +66,19 @@
     } else {
         Write-Output "FILE_NOT_FOUND"
     }
-  run_once: true
   register: verify_result
   when: not enable_dry_run | bool
-  no_log: false
   changed_when: false
 
-- name: RESTRICTED | Set Restricted Group status
+- name: RESTRICTED | Set facts for reporting
   ansible.builtin.set_fact:
     restricted_group_config:
-      stdout: "{{ rg_result.stdout | trim | default('CONFIGURED') }}"
+      stdout: "{{ rg_result.stdout }}"
     verify_restricted_group:
-      stdout: "{{ verify_result.stdout | default('VERIFIED') }}"
+      stdout: "{{ verify_result.stdout }}"
   when: not enable_dry_run | bool
 
-- name: RESTRICTED | Debug Restricted Group status
-  ansible.builtin.debug:
-    msg: "Restricted Group Status: {{ restricted_group_config.stdout }}"
-  when: not enable_dry_run | bool
-
-- name: RESTRICTED | Force policy refresh on target server
+- name: RESTRICTED | Trigger policy refresh
   ansible.windows.win_shell: |
     $ServerName = "{{ server_name }}"
     try {
@@ -117,7 +88,6 @@
     catch {
         Write-Output "GPUPDATE_FAILED: $($_.Exception.Message)"
     }
-  run_once: true
   register: gpupdate_result
   when: not enable_dry_run | bool
   ignore_errors: yes
