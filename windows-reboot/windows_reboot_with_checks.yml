@@ -1,0 +1,130 @@
+---
+- name: Reboot Windows Servers with Pre and Post Checks
+  hosts: windows_servers
+  gather_facts: false
+  vars:
+    # --- Pre-check thresholds ---
+    min_free_space_gb: 5          # Minimum free space on C: drive (GB)
+    max_active_sessions: 0        # Allow zero active user sessions (0 = no users logged in)
+    required_services:            # Services that must be running before and after reboot
+      - WinRM
+      - Netlogon
+    # --- Reboot timeout settings ---
+    reboot_timeout_sec: 900       # 15 minutes
+    pre_reboot_delay_sec: 10
+    post_reboot_delay_sec: 30
+
+  tasks:
+
+    # ============================================================
+    # PRE-CHECKS (run before reboot)
+    # ============================================================
+
+    - name: Check available disk space on C: drive
+      ansible.windows.win_shell: |
+        $disk = Get-PSDrive -Name C
+        $freeGB = [math]::Round($disk.Free / 1GB, 2)
+        Write-Output $freeGB
+      register: disk_free_result
+      changed_when: false
+
+    - name: Fail if disk space is below threshold
+      ansible.builtin.fail:
+        msg: >
+          Insufficient disk space on C: drive. Free: {{ disk_free_result.stdout }} GB,
+          required: {{ min_free_space_gb }} GB.
+      when: disk_free_result.stdout | float < min_free_space_gb
+
+    - name: Check for active user sessions
+      ansible.windows.win_shell: |
+        $sessions = quser 2>$null
+        if ($sessions) {
+          ($sessions | Measure-Object).Count
+        } else {
+          0
+        }
+      register: user_session_result
+      changed_when: false
+
+    - name: Fail if active user sessions exist
+      ansible.builtin.fail:
+        msg: >
+          Active user sessions detected ({{ user_session_result.stdout | trim }} sessions).
+          Reboot aborted to avoid disrupting users.
+      when: user_session_result.stdout | int > max_active_sessions
+
+    - name: Check that required services are running before reboot
+      ansible.windows.win_service:
+        name: "{{ item }}"
+      register: pre_service_check
+      loop: "{{ required_services }}"
+      changed_when: false
+
+    - name: Fail if any required service is not running
+      ansible.builtin.fail:
+        msg: >
+          Service '{{ item.item }}' is not running (state: {{ item.state }}).
+          Reboot aborted.
+      when: item.state != 'running'
+      loop: "{{ pre_service_check.results }}"
+
+    # ============================================================
+    # REBOOT (with post-reboot validation via test_command)
+    # ============================================================
+
+    - name: Reboot the Windows server and wait for services to be ready
+      ansible.windows.win_reboot:
+        msg: "Reboot initiated by Ansible from AAP"
+        pre_reboot_delay: "{{ pre_reboot_delay_sec }}"
+        post_reboot_delay: "{{ post_reboot_delay_sec }}"
+        reboot_timeout: "{{ reboot_timeout_sec }}"
+        # test_command runs after the system comes back; returns exit 0 when ready
+        test_command: |
+          $services = @('WinRM', 'Netlogon')
+          $allRunning = $true
+          foreach ($svc in $services) {
+            $status = (Get-Service -Name $svc -ErrorAction SilentlyContinue).Status
+            if ($status -ne 'Running') {
+              $allRunning = $false
+              break
+            }
+          }
+          if ($allRunning) { exit 0 } else { exit 1 }
+      register: reboot_result
+
+    # ============================================================
+    # POST-CHECKS (run after reboot)
+    # ============================================================
+
+    - name: Verify required services are running after reboot
+      ansible.windows.win_service:
+        name: "{{ item }}"
+      register: post_service_check
+      loop: "{{ required_services }}"
+      changed_when: false
+
+    - name: Fail if any service failed to start after reboot
+      ansible.builtin.fail:
+        msg: >
+          Service '{{ item.item }}' is not running after reboot
+          (state: {{ item.state }}). Manual intervention required.
+      when: item.state != 'running'
+      loop: "{{ post_service_check.results }}"
+
+    - name: Verify disk space after reboot
+      ansible.windows.win_shell: |
+        $disk = Get-PSDrive -Name C
+        [math]::Round($disk.Free / 1GB, 2)
+      register: post_disk_free
+      changed_when: false
+
+    - name: Warn if post-reboot disk space is critically low
+      ansible.builtin.debug:
+        msg: "WARNING: C: drive free space is {{ post_disk_free.stdout }} GB after reboot."
+      when: post_disk_free.stdout | float < min_free_space_gb
+
+    - name: Confirm reboot completed successfully
+      ansible.builtin.debug:
+        msg: >
+          Reboot completed successfully on {{ inventory_hostname }}.
+          System is back online and all required services are running.
