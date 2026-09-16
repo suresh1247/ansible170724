@@ -1,6 +1,6 @@
 ---
 - name: Reboot Windows Servers with Pre and Post Checks
-  hosts: windows_servers
+  hosts: all
   gather_facts: false
   vars:
     # --- Pre-check thresholds ---
