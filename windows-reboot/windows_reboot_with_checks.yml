@@ -1,16 +1,13 @@
 ---
 - name: Reboot Windows Servers with Pre and Post Checks
-  hosts: all
+  hosts: windows_servers
   gather_facts: false
   vars:
-    # --- Pre-check thresholds ---
-    min_free_space_gb: 5          # Minimum free space on C: drive (GB)
-    max_active_sessions: 0        # Allow zero active user sessions (0 = no users logged in)
-    required_services:            # Services that must be running before and after reboot
+    min_free_space_gb: 5
+    required_services:
       - WinRM
       - Netlogon
-    # --- Reboot timeout settings ---
-    reboot_timeout_sec: 900       # 15 minutes
+    reboot_timeout_sec: 900
     pre_reboot_delay_sec: 10
     post_reboot_delay_sec: 30
 
@@ -35,7 +32,23 @@
           required: {{ min_free_space_gb }} GB.
       when: disk_free_result.stdout | float < min_free_space_gb
 
-    - name: "Check for active user sessions"
+    - name: "Log off all active user sessions before reboot"
+      ansible.windows.win_shell: |
+        $activeSessionIDs = (Get-Process -Name "explorer" -ErrorAction SilentlyContinue |
+                             Select-Object -ExpandProperty SessionID) |
+                             Where-Object { $_ -gt 0 }
+        if ($activeSessionIDs.Count -gt 0) {
+          foreach ($sessionID in $activeSessionIDs) {
+            logoff $sessionID
+          }
+          Write-Output "Logged off $($activeSessionIDs.Count) session(s)."
+        } else {
+          Write-Output "No active user sessions found."
+        }
+      register: logoff_result
+      changed_when: "'Logged off' in logoff_result.stdout"
+
+    - name: "Verify no active user sessions remain"
       ansible.windows.win_shell: |
         $sessions = quser 2>$null
         if ($sessions) {
@@ -43,15 +56,16 @@
         } else {
           0
         }
-      register: user_session_result
+      register: post_logoff_session_check
       changed_when: false
+      retries: 3
+      delay: 5
+      until: post_logoff_session_check.stdout | int == 0
 
-    - name: "Fail if active user sessions exist"
-      ansible.builtin.fail:
-        msg: >-
-          Active user sessions detected ({{ user_session_result.stdout | trim }} sessions).
-          Reboot aborted to avoid disrupting users.
-      when: user_session_result.stdout | int > max_active_sessions
+    - name: "Warn if sessions could not be fully cleared"
+      ansible.builtin.debug:
+        msg: "WARNING: {{ post_logoff_session_check.stdout }} session(s) still active after logoff attempt. Proceeding with reboot."
+      when: post_logoff_session_check.stdout | int > 0
 
     - name: "Check that required services are running before reboot"
       ansible.windows.win_service:
@@ -69,7 +83,7 @@
       loop: "{{ pre_service_check.results }}"
 
     # ============================================================
-    # REBOOT (with post-reboot validation via test_command)
+    # REBOOT
     # ============================================================
 
     - name: "Reboot the Windows server and wait for services to be ready"
